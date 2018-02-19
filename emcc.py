@@ -1220,11 +1220,6 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
           if shared.Settings.BINARYEN_PASSES:
             shared.Settings.BINARYEN_PASSES += ','
           shared.Settings.BINARYEN_PASSES += 'safe-heap'
-        # we will include the mem init data in the wasm, when we don't need the
-        # mem init file to be loadable by itself
-        shared.Settings.MEM_INIT_IN_WASM = 'asmjs' not in shared.Settings.BINARYEN_METHOD and \
-                                           'interpret-asm2wasm' not in shared.Settings.BINARYEN_METHOD and \
-                                           not shared.Settings.USE_PTHREADS
 
       # wasm outputs are only possible with a side wasm
       if target.endswith(WASM_ENDINGS):
@@ -1723,7 +1718,7 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
           if not shared.Settings.BINARYEN or 'asmjs' in shared.Settings.BINARYEN_METHOD or 'interpret-asm2wasm' in shared.Settings.BINARYEN_METHOD:
             return 'memoryInitializer = "%s";' % shared.JS.get_subresource_location(memfile, embed_memfile(options))
           else:
-            return ''
+            return 'memoryInitializer = null;'
         src = re.sub(shared.JS.memory_initializer_pattern, repl, open(final).read(), count=1)
         open(final + '.mem.js', 'w').write(src)
         final += '.mem.js'
@@ -2310,7 +2305,8 @@ def do_binaryen(target, asm_target, options, memfile, wasm_binary_target,
       cmd.append(shared.Building.opt_level_to_str(options.opt_level, options.shrink_level))
     # import mem init file if it exists, and if we will not be using asm.js as a binaryen method (as it needs the mem init file, of course)
     mem_file_exists = options.memory_init_file and os.path.exists(memfile)
-    import_mem_init = mem_file_exists and shared.Settings.MEM_INIT_IN_WASM
+    ok_binaryen_method = 'asmjs' not in shared.Settings.BINARYEN_METHOD and 'interpret-asm2wasm' not in shared.Settings.BINARYEN_METHOD
+    import_mem_init = mem_file_exists and ok_binaryen_method
     if import_mem_init:
       cmd += ['--mem-init=' + memfile]
       if not shared.Settings.RELOCATABLE:
