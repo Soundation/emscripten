@@ -433,7 +433,7 @@ function UTF8ArrayToString(u8Array, idx) {
   while (u8Array[endPtr]) ++endPtr;
 
   if (endPtr - idx > 16 && u8Array.subarray && UTF8Decoder) {
-    return UTF8Decoder.decode(u8Array.subarray(idx, endPtr));
+    return UTF8Decoder.decode(u8Array.slice(idx, endPtr));
   } else {
 #endif
     var u0, u1, u2, u3, u4, u5;
