@@ -437,7 +437,7 @@ function stringToAscii(str, outPtr) {
 var UTF8Decoder = typeof TextDecoder !== 'undefined' ? new TextDecoder('utf8') : undefined;
 #endif
 function UTF8ArrayToString(u8Array, idx) {
-#if TEXTDECODER
+#if TEXTDECODER_CANT_USE_SHARED_MEMORY_SOUNDATION
   var endPtr = idx;
   // TextDecoder needs to know the byte length in advance, it doesn't stop on null terminator by itself.
   // Also, use the length info to avoid running tiny strings through TextDecoder, since .subarray() allocates garbage.
@@ -481,7 +481,7 @@ function UTF8ArrayToString(u8Array, idx) {
         str += String.fromCharCode(0xD800 | (ch >> 10), 0xDC00 | (ch & 0x3FF));
       }
     }
-#if TEXTDECODER
+#if TEXTDECODER_CANT_USE_SHARED_MEMORY_SOUNDATION
   }
 #endif
 }
