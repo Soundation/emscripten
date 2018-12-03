@@ -1,3 +1,8 @@
+// Copyright 2010 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 //"use strict";
 
 // Convert analyzed data to javascript. Everything has already been calculated
@@ -47,7 +52,7 @@ function JSify(data, functionsOnly) {
   var itemsDict = { type: [], GlobalVariableStub: [], functionStub: [], function: [], GlobalVariable: [], GlobalVariablePostSet: [] };
 
   if (mainPass) {
-    var shellFile = SHELL_FILE ? SHELL_FILE : (BUILD_AS_SHARED_LIB || SIDE_MODULE ? 'shell_sharedlib.js' : 'shell.js');
+    var shellFile = SHELL_FILE ? SHELL_FILE : (SIDE_MODULE ? 'shell_sharedlib.js' : 'shell.js');
 
     // We will start to print out the data, but must do so carefully - we are
     // dealing with potentially *huge* strings. Convenient replacements and
@@ -71,7 +76,7 @@ function JSify(data, functionsOnly) {
     var shellParts = read(shellFile).split('{{BODY}}');
     print(processMacros(preprocess(shellParts[0], shellFile)));
     var pre;
-    if (BUILD_AS_SHARED_LIB || SIDE_MODULE) {
+    if (SIDE_MODULE) {
       pre = processMacros(preprocess(read('preamble_sharedlib.js'), 'preamble_sharedlib.js'));
     } else {
       pre = processMacros(preprocess(read('support.js'), 'support.js')) +
@@ -88,7 +93,7 @@ function JSify(data, functionsOnly) {
 
     var libFuncsToInclude;
     if (INCLUDE_FULL_LIBRARY) {
-      assert(!(BUILD_AS_SHARED_LIB || SIDE_MODULE), 'Cannot have both INCLUDE_FULL_LIBRARY and BUILD_AS_SHARED_LIB/SIDE_MODULE set.')
+      assert(!SIDE_MODULE, 'Cannot have both INCLUDE_FULL_LIBRARY and SIDE_MODULE set.')
       libFuncsToInclude = (MAIN_MODULE || SIDE_MODULE) ? DEFAULT_LIBRARY_FUNCS_TO_INCLUDE.slice(0) : [];
       for (var key in LibraryManager.library) {
         if (!key.match(/__(deps|postset|inline|asm|sig)$/)) {
@@ -240,8 +245,12 @@ function JSify(data, functionsOnly) {
         if (!(finalName in IMPLEMENTED_FUNCTIONS)) {
           if (VERBOSE || ident.substr(0, 11) !== 'emscripten_') { // avoid warning on emscripten_* functions which are for internal usage anyhow
             if (!LINKABLE) {
-              if (ERROR_ON_UNDEFINED_SYMBOLS) error('unresolved symbol: ' + ident);
-              else if (VERBOSE || WARN_ON_UNDEFINED_SYMBOLS) warn('unresolved symbol: ' + ident);
+              if (ERROR_ON_UNDEFINED_SYMBOLS) {
+                error('undefined symbol: ' + ident);
+                warnOnce('To disable errors for undefined symbols use `-s ERROR_ON_UNDEFINED_SYMBOLS=0`')
+              } else if (VERBOSE || WARN_ON_UNDEFINED_SYMBOLS) {
+                warn('undefined symbol: ' + ident);
+              }
             }
           }
         }
@@ -335,12 +344,13 @@ function JSify(data, functionsOnly) {
           var proxyingFunc = synchronousCall ? '_emscripten_sync_run_in_browser_thread_' : '_emscripten_async_run_in_browser_thread_';
           if (sig.length > 1) {
             // If the function takes parameters, forward those to the proxied function call
-            snippet = snippet.replace(/function\s+(.*)?\s*\((.*?)\)\s*{/, 'function $1($2) {\nif (ENVIRONMENT_IS_PTHREAD) return ' + proxyingFunc + sig + '(' + proxiedFunctionTable.length + ', $2);');
+            var processedSnippet = snippet.replace(/function\s+(.*)?\s*\((.*?)\)\s*{/, 'function $1($2) {\nif (ENVIRONMENT_IS_PTHREAD) return ' + proxyingFunc + sig + '(' + proxiedFunctionTable.length + ', $2);');
           } else {
             // No parameters to the function
-            snippet = snippet.replace(/function (.*)? {/, 'function $1 {\nif (ENVIRONMENT_IS_PTHREAD) return ' + proxyingFunc + sig + '(' + proxiedFunctionTable.length + ');');
+            var processedSnippet = snippet.replace(/function\s+(.*)?\s*\((.*?)\)\s*{/, 'function $1() {\nif (ENVIRONMENT_IS_PTHREAD) return ' + proxyingFunc + sig + '(' + proxiedFunctionTable.length + ');');
           }
-          contentText = snippet;
+          if (processedSnippet == snippet) throw 'Failed to regex parse function to add pthread proxying preamble to it! Function: ' + snippet;
+          contentText = processedSnippet;
           proxiedFunctionTable.push(finalName);
         } else {
           contentText = snippet; // Regular JS function that will be executed in the context of the calling thread.
@@ -380,22 +390,17 @@ function JSify(data, functionsOnly) {
 
     itemsDict.functionStub.push(item);
     var shortident = item.ident.substr(1);
-    if (BUILD_AS_SHARED_LIB) {
-      // Shared libraries reuse the runtime of their parents.
-      item.JS = '';
-    } else {
-      // If this is not linkable, anything not in the library is definitely missing
-      if (item.ident in DEAD_FUNCTIONS) {
-        if (LibraryManager.library[shortident + '__asm']) {
-          warn('cannot kill asm library function ' + item.ident);
-        } else {
-          LibraryManager.library[shortident] = new Function("err('dead function: " + shortident + "'); abort(-1);");
-          delete LibraryManager.library[shortident + '__inline'];
-          delete LibraryManager.library[shortident + '__deps'];
-        }
+    // If this is not linkable, anything not in the library is definitely missing
+    if (item.ident in DEAD_FUNCTIONS) {
+      if (LibraryManager.library[shortident + '__asm']) {
+        warn('cannot kill asm library function ' + item.ident);
+      } else {
+        LibraryManager.library[shortident] = new Function("err('dead function: " + shortident + "'); abort(-1);");
+        delete LibraryManager.library[shortident + '__inline'];
+        delete LibraryManager.library[shortident + '__deps'];
       }
-      item.JS = addFromLibrary(shortident);
     }
+    item.JS = addFromLibrary(shortident);
   }
 
   // Final combiner
@@ -425,7 +430,7 @@ function JSify(data, functionsOnly) {
     //
 
     if (!mainPass) {
-      if (!Variables.generatedGlobalBase && !BUILD_AS_SHARED_LIB) {
+      if (!Variables.generatedGlobalBase) {
         Variables.generatedGlobalBase = true;
         // Globals are done, here is the rest of static memory
         if (!SIDE_MODULE) {
@@ -483,29 +488,29 @@ function JSify(data, functionsOnly) {
         print('/* no memory initializer */'); // test purposes
       }
 
-      if (!BUILD_AS_SHARED_LIB && !SIDE_MODULE) {
+      if (!SIDE_MODULE) {
         if (USE_PTHREADS) {
-          print('var tempDoublePtr;\n');
-          print('if (!ENVIRONMENT_IS_PTHREAD) tempDoublePtr = alignMemory(allocate(12, "i8", ALLOC_STATIC), 8);\n');
+          print('var tempDoublePtr;');
+          print('if (!ENVIRONMENT_IS_PTHREAD) tempDoublePtr = alignMemory(allocate(12, "i8", ALLOC_STATIC), 8);');
         } else {
-          print('var tempDoublePtr = ' + makeStaticAlloc(8) + '\n');
+          print('var tempDoublePtr = ' + makeStaticAlloc(8) + '');
         }
-        if (ASSERTIONS) print('assert(tempDoublePtr % 8 == 0);\n');
-        print('function copyTempFloat(ptr) { // functions, because inlining this code increases code size too much\n');
-        print('  HEAP8[tempDoublePtr] = HEAP8[ptr];\n');
-        print('  HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];\n');
-        print('  HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];\n');
-        print('  HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];\n');
+        if (ASSERTIONS) print('assert(tempDoublePtr % 8 == 0);');
+        print('\nfunction copyTempFloat(ptr) { // functions, because inlining this code increases code size too much');
+        print('  HEAP8[tempDoublePtr] = HEAP8[ptr];');
+        print('  HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];');
+        print('  HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];');
+        print('  HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];');
         print('}\n');
-        print('function copyTempDouble(ptr) {\n');
-        print('  HEAP8[tempDoublePtr] = HEAP8[ptr];\n');
-        print('  HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];\n');
-        print('  HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];\n');
-        print('  HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];\n');
-        print('  HEAP8[tempDoublePtr+4] = HEAP8[ptr+4];\n');
-        print('  HEAP8[tempDoublePtr+5] = HEAP8[ptr+5];\n');
-        print('  HEAP8[tempDoublePtr+6] = HEAP8[ptr+6];\n');
-        print('  HEAP8[tempDoublePtr+7] = HEAP8[ptr+7];\n');
+        print('function copyTempDouble(ptr) {');
+        print('  HEAP8[tempDoublePtr] = HEAP8[ptr];');
+        print('  HEAP8[tempDoublePtr+1] = HEAP8[ptr+1];');
+        print('  HEAP8[tempDoublePtr+2] = HEAP8[ptr+2];');
+        print('  HEAP8[tempDoublePtr+3] = HEAP8[ptr+3];');
+        print('  HEAP8[tempDoublePtr+4] = HEAP8[ptr+4];');
+        print('  HEAP8[tempDoublePtr+5] = HEAP8[ptr+5];');
+        print('  HEAP8[tempDoublePtr+6] = HEAP8[ptr+6];');
+        print('  HEAP8[tempDoublePtr+7] = HEAP8[ptr+7];');
         print('}\n');
       }
       print('// {{PRE_LIBRARY}}\n'); // safe to put stuff here that statically allocates
@@ -526,10 +531,18 @@ function JSify(data, functionsOnly) {
 
     legalizedI64s = legalizedI64sDefault;
 
-    if (!BUILD_AS_SHARED_LIB && !SIDE_MODULE) {
+    if (!SIDE_MODULE) {
       if (USE_PTHREADS) {
         print('\n // proxiedFunctionTable specifies the list of functions that can be called either synchronously or asynchronously from other threads in postMessage()d or internally queued events. This way a pthread in a Worker can synchronously access e.g. the DOM on the main thread.')
         print('\nvar proxiedFunctionTable = [' + proxiedFunctionTable.join() + '];\n');
+        // Generate worker->main thread proxy function invokers for MAIN_THREAD_EM_ASM() signatures.
+        for (var i in PROXIED_FUNCTION_SIGNATURES) {
+          var invokerKey = PROXIED_FUNCTION_SIGNATURES[i];
+          if (!proxiedFunctionInvokers[invokerKey]) {
+            var sig_sync = invokerKey.split('_');
+            proxiedFunctionInvokers[invokerKey] = generateProxiedCallInvoker(sig_sync[0], sig_sync[1] === 'sync');
+          }
+        }
         for(i in proxiedFunctionInvokers) print(proxiedFunctionInvokers[i]+'\n');
         print('if (!ENVIRONMENT_IS_PTHREAD) {\n // Only main thread initializes these, pthreads copy them over at thread worker init time (in pthread-main.js)');
       }
@@ -542,9 +555,6 @@ function JSify(data, functionsOnly) {
       print('staticSealed = true; // seal the static portion of memory\n');
       if (ASSERTIONS) print('assert(DYNAMIC_BASE < TOTAL_MEMORY, "TOTAL_MEMORY not big enough for stack");\n');
       if (USE_PTHREADS) print('}\n');
-    }
-    if (SPLIT_MEMORY) {
-      print('assert(STACK_MAX < SPLIT_MEMORY, "SPLIT_MEMORY size must be big enough so the entire static memory + stack can fit in one chunk, need " + STACK_MAX);\n');
     }
 
     print('var ASSERTIONS = ' + !!ASSERTIONS + ';\n');
@@ -565,7 +575,7 @@ function JSify(data, functionsOnly) {
       print(asmLibraryFunctions.map(fix).join('\n'));
     }
 
-    if (abortExecution) throw 'Aborting compilation due to previous errors';
+    if (abortExecution) throw Error('Aborting compilation due to previous errors');
 
     // This is the main 'post' pass. Print out the generated code that we have here, together with the
     // rest of the output that we started to print out earlier (see comment on the
@@ -589,7 +599,7 @@ function JSify(data, functionsOnly) {
       print(read('deterministic.js'));
     }
 
-    var postFile = BUILD_AS_SHARED_LIB || SIDE_MODULE ? 'postamble_sharedlib.js' : 'postamble.js';
+    var postFile = SIDE_MODULE ? 'postamble_sharedlib.js' : 'postamble.js';
     var postParts = processMacros(preprocess(read(postFile), postFile)).split('{{GLOBAL_VARS}}');
     print(postParts[0]);
 

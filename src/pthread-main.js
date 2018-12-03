@@ -1,3 +1,8 @@
+// Copyright 2015 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 // Pthread Web Worker startup routine:
 // This is the entry point file that is loaded first by each Web Worker
 // that executes pthreads on the Emscripten application.
@@ -67,7 +72,7 @@ Module['instantiateWasm'] = function(info, receiveInstance) {
   instance = new WebAssembly.Instance(Module['wasmModule'], info);
   // We don't need the module anymore; new threads will be spawned from the main thread.
   delete Module['wasmModule'];
-  receiveInstance(instance);
+  receiveInstance(instance); // The second 'module' parameter is intentionally null here, we don't need to keep a ref to the Module object from here.
   return instance.exports;
 }
 //#endif
@@ -164,7 +169,7 @@ this.onmessage = function(e) {
       }
       // The thread might have finished without calling pthread_exit(). If so, then perform the exit operation ourselves.
       // (This is a no-op if explicit pthread_exit() had been called prior.)
-      PThread.threadExit(result);
+      if (!Module['noExitRuntime']) PThread.threadExit(result);
     } else if (e.data.cmd === 'cancel') { // Main thread is asking for a pthread_cancel() on this thread.
       if (threadInfoStruct && PThread.thisThreadCancelState == 0/*PTHREAD_CANCEL_ENABLE*/) {
         PThread.threadCancel();

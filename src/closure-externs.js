@@ -1,4 +1,9 @@
 /**
+ * Copyright 2014 The Emscripten Authors.  All rights reserved.
+ * Emscripten is available under two separate licenses, the MIT license and the
+ * University of Illinois/NCSA Open Source License.  Both these licenses can be
+ * found in the LICENSE file.
+ *
  * This file contains definitions for things that we'd really rather the closure compiler *didn't* minify.
  * See http://code.google.com/p/closure-compiler/wiki/FAQ#How_do_I_write_an_externs_file
  * See also the discussion here: https://github.com/kripken/emscripten/issues/1979
@@ -87,6 +92,35 @@ flags.binary;
  * @see https://developer.mozilla.org/en-US/docs/Web/API/Document/currentScript
  */
 Document.prototype.currentScript;
+
+/**
+ * Don't minify Math.*
+ */
+/**
+ * @suppress {duplicate}
+ */
+var Math = {};
+Math.abs = function() {};
+Math.cos = function() {};
+Math.sin = function() {};
+Math.tan = function() {};
+Math.acos = function() {};
+Math.asin = function() {};
+Math.atan = function() {};
+Math.atan2 = function() {};
+Math.exp = function() {};
+Math.log = function() {};
+Math.sqrt = function() {};
+Math.ceil = function() {};
+Math.floor = function() {};
+Math.pow = function() {};
+Math.imul = function() {};
+Math.fround = function() {};
+Math.round = function() {};
+Math.min = function() {};
+Math.max = function() {};
+Math.clz32 = function() {};
+Math.trunc = function() {};
 
 /**
  * SIMD.js support (not in upstream closure yet).
@@ -1289,7 +1323,7 @@ var _glutPostRedisplay = function() {};
 var emscripten_source_map;
 
 /**
- * @typy {Worker}
+ * @type {Worker}
  */
 var worker;
 /**
@@ -1330,3 +1364,9 @@ var __setLetterbox = function(element, topBottom, leftRight) {};
  */
 var onmessage = function(message) {};
 
+// Fetch.js/Fetch Worker
+
+/**
+ * @suppress {undefinedVars}
+ */
+var ENVIRONMENT_IS_FETCH_WORKER;

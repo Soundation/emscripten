@@ -1,4 +1,8 @@
 #!/usr/bin/env python2
+# Copyright 2014 The Emscripten Authors.  All rights reserved.
+# Emscripten is available under two separate licenses, the MIT license and the
+# University of Illinois/NCSA Open Source License.  Both these licenses can be
+# found in the LICENSE file.
 
 '''
 Processes asm.js code to make it run in an emterpreter.
@@ -913,7 +917,7 @@ if __name__ == '__main__':
         func, curr, absolute_targets = json.loads(line[len('// EMTERPRET_INFO '):])
       except Exception as e:
         print('failed to parse code from', line, file=sys.stderr)
-        raise e
+        raise
       assert len(curr) % 4 == 0, len(curr)
       funcs[func] = len(all_code) # no operation here should change the length
       if LOG_CODE: print('raw bytecode for %s:' % func, curr, 'insts:', len(curr)//4, file=sys.stderr)
@@ -1071,16 +1075,6 @@ __ATPRERUN__.push(function() {
     js = js.replace('assert(', '//assert(')
   assert '// {{PRE_LIBRARY}}' in asm.pre_js
   asm.pre_js = asm.pre_js.replace('// {{PRE_LIBRARY}}', '// {{PRE_LIBRARY}}\n' + js)
-
-  # send EMT vars into asm
-  asm.pre_js += "Module.asmLibraryArg['EMTSTACKTOP'] = EMTSTACKTOP; Module.asmLibraryArg['EMT_STACK_MAX'] = EMT_STACK_MAX; Module.asmLibraryArg['eb'] = eb;\n"
-  extra_vars = 'var EMTSTACKTOP = env.EMTSTACKTOP|0;\nvar EMT_STACK_MAX = env.EMT_STACK_MAX|0;\nvar eb = env.eb|0;\n'
-  first_func = asm.imports_js.find('function ')
-  if first_func < 0:
-    asm.imports_js += extra_vars
-  else:
-    # imports contains a function (not a true asm function, hidden from opt passes) that we must not be before
-    asm.imports_js = asm.imports_js[:first_func] + '\n' + extra_vars + '\n' + asm.imports_js[first_func:]
 
   asm.write(outfile)
 

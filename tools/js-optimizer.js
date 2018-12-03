@@ -1,7 +1,8 @@
-// -*- Mode: javascript; tab-width: 8; indent-tabs-mode: nil; c-basic-offset: 2 ; js-indent-level : 2 ; js-curly-indent-offset: 0 -*-
-// vim: set ts=2 et sw=2:
-
-//==============================================================================
+// Copyright 2011 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+//
 // Optimizer tool. This is meant to be run after the emscripten compiler has
 // finished generating code. These optimizations are done on the generated
 // code to further improve it.
@@ -13,7 +14,6 @@
 // TODO: Optimize traverse to modify a node we want to replace, in-place,
 //       instead of returning it to the previous call frame where we check?
 // TODO: Share EMPTY_NODE instead of emptyNode that constructs?
-//==============================================================================
 
 if (!Math.fround) {
   var froundBuffer = new Float32Array(1);
@@ -997,6 +997,21 @@ function simplifyExpressions(ast) {
   });
 }
 
+// Checks if a coercion is necessary for asm.js, and cannot be
+// removed. Receives the node, and the expression stack, which
+// includes the node at the end.
+function isNecessaryCoercion(node, stack) {
+  assert(stack[stack.length - 1] === node);
+  var parent = stack[stack.length - 2];
+  if (!parent) return false;
+  if (parent[0] === 'sub') {
+    // We are x & mask in FUNCTION_TABLE[x & mask], and the mask
+    // is necessary.
+    return true;
+  }
+  return false;
+}
+
 function localCSE(ast) {
   // very simple CSE/GVN type optimization, factor out common expressions in a single basic block
   assert(asm);
@@ -1053,7 +1068,10 @@ function localCSE(ast) {
         }
         // next, process the line and try to find useful expressions
         var skips = [];
+
+        var stack = [];
         traverse(curr, function seekExpressions(node, type) {
+          stack.push(node);
           if (type === 'sub' && node[1][0] === 'name' && node[2][0] === 'binary' && node[2][1] === '>>') {
             // skip over the shift, we can't cse that
             skips.push(node[2]);
@@ -1063,6 +1081,8 @@ function localCSE(ast) {
             if (type === 'binary' && skips.indexOf(node) >= 0) return;
             if (measureCost(node) < MIN_COST) return;
             if (detectType(node, asmData) === ASM_NONE) return; // if we can't figure it out locally, forget it
+            // We cannot CSE out a necessary asm.js coercion
+            if (isNecessaryCoercion(node, stack)) return;
             var str = JSON.stringify(node);
             var lookup = exps[str];
             if (!lookup) {
@@ -1117,6 +1137,8 @@ function localCSE(ast) {
               return makeSignedAsmCoercion(['name', lookup[2]], type, sign);
             }
           }
+        }, function(node, type) { // post-traversal
+          stack.pop();
         });
         // finally, repeat invalidation processing, to not be sensitive to inter-line control flow
         doInvalidations(curr);
@@ -8034,6 +8056,12 @@ function getModuleUseName(node) {
   return node[2][1];
 }
 
+function isModuleAsmUse(node) { // Module["asm"][..string..]
+  return node[0] === 'sub' &&
+         node[1][0] === 'sub' && node[1][1][0] === 'name' && node[1][1][1] === 'Module' && node[1][2][0] === 'string' && node[1][2][1] === 'asm' &&
+         node[2][0] === 'string';
+}
+
 // A static dyncall is dynCall('vii', ..), which is actually static even
 // though we call dynCall() - we see the string signature statically.
 function isStaticDynCall(node) {
@@ -8128,8 +8156,7 @@ function emitDCEGraph(ast) {
     if (isAsmLibraryArgAssign(node)) {
       var items = node[3][1];
       items.forEach(function(item) {
-        assert(item[1][0] === 'name' && item[1][1] === item[0], item[0]); // must have x: x form, nothing else
-        imports.push(item[0]); // the value doesn't matter, for now
+        imports.push(item[1][1]); // the name doesn't matter, only the value which is that actual thing we are importing
       });
       foundAsmLibraryArgAssign = true;
       return emptyNode(); // ignore this in the second pass; this does not root
@@ -8307,6 +8334,46 @@ function applyDCEGraphRemovals(ast) {
   });
 }
 
+// Apply import/export name changes (after minifying them)
+function applyImportAndExportNameChanges(ast) {
+  var mapping = extraInfo.mapping;
+  traverse(ast, function(node, type) {
+    if (isAsmLibraryArgAssign(node)) {
+      node[3][1] = node[3][1].map(function(item) {
+        var name = item[0];
+        var value = item[1];
+        if (mapping[name]) {
+          var ret = [mapping[name], value];
+          // Uglify uses this property to tell it to emit
+          // { "quotedname": .. }
+          // as opposed to
+          // { quotedname: }
+          // We need quoting for closure compiler to work
+          // TODO: disable otherwise
+          ret.quoted = true;
+          return ret;
+        }
+        return item;
+      });
+    } else if (type === 'assign') {
+      var target = node[2];
+      var value = node[3];
+      if (isAsmUse(value)) {
+        var name = value[2][1];
+        if (mapping[name]) {
+          value[2][1] = mapping[name];
+        }
+      }
+    } else if (isModuleAsmUse(node)) {
+      var prop = node[2];
+      var name = prop[1];
+      if (mapping[name]) {
+        prop[1] = mapping[name];
+      }
+    }
+  });
+}
+
 function removeFuncs(ast) {
   assert(ast[0] === 'toplevel');
   var keep = set(extraInfo.keep);
@@ -8358,6 +8425,7 @@ var passes = {
   AJSDCE: AJSDCE,
   emitDCEGraph: emitDCEGraph,
   applyDCEGraphRemovals: applyDCEGraphRemovals,
+  applyImportAndExportNameChanges: applyImportAndExportNameChanges,
   removeFuncs: removeFuncs,
   noop: function() {},
 
@@ -8427,4 +8495,3 @@ if (emitAst) {
     print(JSON.stringify(ast));
   }
 }
-

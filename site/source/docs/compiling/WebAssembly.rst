@@ -20,7 +20,7 @@ WebAssembly is emitted by default, without the need for any special flags.
 
 ::
 
-	emcc [..args..] -s WASM=0
+  emcc [..args..] -s WASM=0
 
 .. note:: Emscripten's WebAssembly support depends on `Binaryen <https://github.com/WebAssembly/binaryen>`_, which will be automatically fetched and built for you (you may see logging about that, the first time you compile to WebAssembly).
 .. note:: The ``WASM``, ``BINARYEN*``, etc. options only matter when compiling to your final executable. In other words, the same .o files are used for both asm.js and WebAssembly. Only when linking them and compiling to asm.js or WebAssembly do you need to specify WebAssembly if you want that. That means that it is easy to build your project to both asm.js and WebAssembly.
@@ -38,7 +38,7 @@ By default, it will try native support. The full list of methods is
 - ``interpret-asm2wasm``: Load ``.asm.js``, compile to wasm on the fly, and interpret that.
 - ``asmjs``: Load ``.asm.js`` and just run it, no wasm. Useful for comparisons, or as a fallback for browsers without WebAssembly support.
 
-For more details, see the function ``integrateWasmJS`` in :ref:`preamble.js <preamble.js>`, which is where all the integration between JavaScript and WebAssembly happens.
+For more details, see the function ``integrateWasmJS`` in :ref:`preamble-js`, which is where all the integration between JavaScript and WebAssembly happens.
 
 Codegen effects
 ---------------
@@ -61,7 +61,7 @@ Binaryen codegen options
 Trap mode
 ---------
 
-WebAssembly can trap - throw an exception - on things like division by zero, rounding a very large float to an int, and so forth. In asm.js such things were silently ignored, as in JavaScript they do not throw, so this is a difference between JavaScript and WebAssembly that you may notice, with the browser reporting an error like ``float unrepresentable in integer range``, ``integer result unrepresentable``, or ``integer overflow``.
+WebAssembly can trap - throw an exception - on things like division by zero, rounding a very large float to an int, and so forth. In asm.js such things were silently ignored, as in JavaScript they do not throw, so this is a difference between JavaScript and WebAssembly that you may notice, with the browser reporting an error like ``float unrepresentable in integer range``, ``integer result unrepresentable``, ``integer overflow``, or ``Out of bounds Trunc operation``.
 
 By default emscripten will emit code that is optimized for size and speed, which means it emits code that may trap on the things mentioned before. That mode is called ``allow``. The other modes are ``clamp``, which will avoid traps by clamping values to a reasonable range, and ``js``, which ensures the exact same behavior as JavaScript does (which also does clamping, but makes sure to clamp exactly like JavaScript does, and also do other things JavaScript would).
 
@@ -69,7 +69,7 @@ In general, using ``clamp`` is safest, as whether such a trap occurs depends on 
 
  ::
 
-	-s "BINARYEN_TRAP_MODE='clamp'"
+  -s "BINARYEN_TRAP_MODE='clamp'"
 
 
 However, if the default (to allow traps) works in your codebase, then it may be worth keeping it that way, for the (small) benefits. Note that ``js``, which preserves the exact same behavior as JavaScript does, adds a large amount of overhead, so unless you really need that, use ``clamp`` (``js`` is often useful for debugging, though).
@@ -151,6 +151,16 @@ Also make sure that gzip is enabled:
 
     AddOutputFilterByType DEFLATE application/wasm
 
+If you serve large ``.wasm`` files, the webserver will consume CPU compressing them on the fly at each request.
+Instead you can pre-compress them to ``.wasm.gz`` and use content negotiation:
+
+.. code-block:: none
+
+    Options Multiviews
+    RemoveType .gz
+    AddEncoding x-gzip .gz
+    AddType application/wasm .wasm
+
 LLVM WebAssembly backend
 ========================
 
@@ -169,5 +179,4 @@ The ``EMCC_WASM_BACKEND`` env var tells Emscripten to use the wasm backend.
 Note that when using the WebAssembly backend in this manner, you do not actually need Emscripten's asm.js backend, which means you don't need Emscripten's "fastcomp" fork of LLVM. Instead you must use "vanilla" LLVM (that is, pure upstream LLVM, with no Emscripten additions).
 
 - When doing so, you do not need the ``EMCC_WASM_BACKEND=1`` env var, as emcc will detect the lack of the asm.js backend and infer it must use the wasm backend. (However, you can still set it, and it's a little faster, since it avoids the check).
-- If you build LLVM by yourself, note that WebAssembly is not built by default. You should pass ``-DLLVM_EXPERIMENTAL_TARGETS_TO_BUILD=WebAssembly`` to ``cmake``.
 - Edit ``LLVM_ROOT`` in ``~/.emscripten`` so that it points to the ``bin`` directory of your custom LLVM build.

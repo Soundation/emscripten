@@ -1,3 +1,8 @@
+// Copyright 2016 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 var Fetch = {
   attr_t_offset_requestMethod: 0,
   attr_t_offset_userData: 32,
@@ -395,7 +400,7 @@ function __emscripten_fetch_xhr(fetch, onsuccess, onerror, onprogress) {
     }
     HEAPU16[fetch + Fetch.fetch_t_offset_status >> 1] = xhr.status;
     if (xhr.statusText) stringToUTF8(xhr.statusText, fetch + Fetch.fetch_t_offset_statusText, 64);
-    if (xhr.status == 200) {
+    if (xhr.status >= 200 && xhr.status < 300) {
 #if FETCH_DEBUG
       console.log('fetch: xhr of URL "' + xhr.url_ + '" / responseURL "' + xhr.responseURL + '" succeeded with status 200');
 #endif

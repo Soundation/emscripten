@@ -1,3 +1,8 @@
+// Copyright 2013 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 mergeInto(LibraryManager.library, {
   $FS__deps: ['$ERRNO_CODES', '$ERRNO_MESSAGES', '__setErrNo', '$PATH', '$TTY', '$MEMFS',
 #if __EMSCRIPTEN_HAS_idbfs_js__
@@ -1057,7 +1062,7 @@ mergeInto(LibraryManager.library, {
         if (!FS.readFiles) FS.readFiles = {};
         if (!(path in FS.readFiles)) {
           FS.readFiles[path] = 1;
-          err('read file: ' + path);
+          console.log("FS.trackingDelegate error on read file: " + path);
         }
       }
       try {
@@ -1301,7 +1306,7 @@ mergeInto(LibraryManager.library, {
 #endif // ENVIRONMENT_MAY_BE_NODE
       } else {
         // default for ES5 platforms
-        random_device = function() { return (Math.random()*256)|0; };
+        random_device = function() { abort("random_device"); /*Math.random() is not safe for random number generation, so this fallback random_device implementation aborts... see kripken/emscripten/pull/7096 */ };
       }
       FS.createDevice('/dev', 'random', random_device);
       FS.createDevice('/dev', 'urandom', random_device);
@@ -1374,7 +1379,6 @@ mergeInto(LibraryManager.library, {
     ensureErrnoError: function() {
       if (FS.ErrnoError) return;
       FS.ErrnoError = function ErrnoError(errno, node) {
-        //err(stackTrace()); // useful for debugging
         this.node = node;
         this.setErrno = function(errno) {
           this.errno = errno;

@@ -1,3 +1,10 @@
+/*
+ * Copyright 2017 The Emscripten Authors.  All rights reserved.
+ * Emscripten is available under two separate licenses, the MIT license and the
+ * University of Illinois/NCSA Open Source License.  Both these licenses can be
+ * found in the LICENSE file.
+ */
+
 // AL proc address retrieval
 
 #include <string.h>
@@ -88,7 +95,6 @@ void* emscripten_GetAlProcAddress(ALchar *name) {
   else if (!strcmp(name, "alGenSources")) { return alGenSources; }
   else if (!strcmp(name, "alDeleteSources")) { return alDeleteSources; }
   else if (!strcmp(name, "alIsSource")) { return alIsSource; }
-  else if (!strcmp(name, "alIsSource")) { return alIsSource; }
   else if (!strcmp(name, "alSourcef")) { return alSourcef; }
   else if (!strcmp(name, "alSource3f")) { return alSource3f; }
   else if (!strcmp(name, "alSourcefv")) { return alSourcefv; }
@@ -114,7 +120,6 @@ void* emscripten_GetAlProcAddress(ALchar *name) {
   else if (!strcmp(name, "alGenBuffers")) { return alGenBuffers; }
   else if (!strcmp(name, "alDeleteBuffers")) { return alDeleteBuffers; }
   else if (!strcmp(name, "alIsBuffer")) { return alIsBuffer; }
-  else if (!strcmp(name, "alBufferData")) { return alBufferData; }
   else if (!strcmp(name, "alBufferData")) { return alBufferData; }
   else if (!strcmp(name, "alBufferf")) { return alBufferf; }
   else if (!strcmp(name, "alBuffer3f")) { return alBuffer3f; }

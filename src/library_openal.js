@@ -1,3 +1,8 @@
+// Copyright 2013 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 //'use strict';
 
 var LibraryOpenAL = {
@@ -2064,7 +2069,7 @@ var LibraryOpenAL = {
   alcCloseDevice__proxy: 'sync',
   alcCloseDevice__sig: 'ii',
   alcCloseDevice: function(deviceId) {
-    if (!deviceId in AL.deviceRefCounts || AL.deviceRefCounts[deviceId] > 0) {
+    if (!(deviceId in AL.deviceRefCounts) || AL.deviceRefCounts[deviceId] > 0) {
       return 0 /* ALC_FALSE */;
     }
 
@@ -2076,7 +2081,7 @@ var LibraryOpenAL = {
   alcCreateContext__proxy: 'sync',
   alcCreateContext__sig: 'iii',
   alcCreateContext: function(deviceId, pAttrList) {
-    if (!deviceId in AL.deviceRefCounts) {
+    if (!(deviceId in AL.deviceRefCounts)) {
 #if OPENAL_DEBUG
       console.log('alcCreateContext() called with an invalid device');
 #endif
@@ -2639,6 +2644,7 @@ var LibraryOpenAL = {
 
   emscripten_alcGetStringiSOFT__proxy: 'sync',
   emscripten_alcGetStringiSOFT__sig: 'iiii',
+  emscripten_alcGetStringiSOFT__deps: ['alcGetString'],
   emscripten_alcGetStringiSOFT: function(deviceId, param, index) {
     if (!deviceId in AL.deviceRefCounts) {
 #if OPENAL_DEBUG
@@ -2666,7 +2672,7 @@ var LibraryOpenAL = {
       }
     default:
       if (index === 0) {
-        return alcGetString(deviceId, param);
+        return _alcGetString(deviceId, param);
       } else {
 #if OPENAL_DEBUG
         console.log('alcGetStringiSOFT() with param 0x' + param.toString(16) + ' not implemented yet');
@@ -3097,7 +3103,7 @@ var LibraryOpenAL = {
       break;
     case 0xB004 /* AL_EXTENSIONS */:
       ret = '';
-      for (ext in AL.AL_EXTENSIONS) {
+      for (var ext in AL.AL_EXTENSIONS) {
         ret = ret.concat(ext);
         ret = ret.concat(' ');
       }

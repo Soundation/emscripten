@@ -1,3 +1,8 @@
+// Copyright 2010 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 //"use strict";
 
 // See browser tests for examples (tests/runner.py, search for sdl_). Run with
@@ -11,7 +16,7 @@
 
 var LibrarySDL = {
   $SDL__deps: [
-#if NO_FILESYSTEM == 0
+#if FILESYSTEM
     '$FS',
 #endif
     '$PATH', '$Browser', 'SDL_GetTicks', 'SDL_LockSurface',
@@ -395,6 +400,10 @@ var LibrarySDL = {
         alpha: (SDL.glAttributes[3 /*SDL_GL_ALPHA_SIZE*/] > 0)
       };
 
+#if OFFSCREEN_FRAMEBUFFER
+      // TODO: Make SDL explicitly aware of whether it is being proxied or not, and set these to true only when proxying is being performed.
+      GL.enableOffscreenFramebufferAttributes(webGLContextAttributes);
+#endif
       var ctx = Browser.createContext(canvas, is_SDL_OPENGL, usePageCanvas, webGLContextAttributes);
 
       SDL.surfaces[surf] = {
@@ -1468,11 +1477,9 @@ var LibrarySDL = {
       });
     }
 
-    if (width !== canvas.width || height !== canvas.height) {
-      SDL.settingVideoMode = true; // SetVideoMode itself should not trigger resize events
-      Browser.setCanvasSize(width, height);
-      SDL.settingVideoMode = false;
-    }
+    SDL.settingVideoMode = true; // SetVideoMode itself should not trigger resize events
+    Browser.setCanvasSize(width, height);
+    SDL.settingVideoMode = false;
 
     // Free the old surface first if there is one
     if (SDL.screen) {

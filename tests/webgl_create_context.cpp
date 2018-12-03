@@ -1,3 +1,8 @@
+// Copyright 2014 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 #include <GLES2/gl2.h>
 #include <GLES2/gl2ext.h>
 
@@ -172,6 +177,11 @@ int main()
     glGetVertexAttribiv(1, GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING, &vb4);
     if (vb2 != vb4) printf("Index 1: Generated VB: %d, read back VB: %d\n", vb2, vb4);
     assert(vb2 == vb4);
+
+    // Test bug https://github.com/kripken/emscripten/issues/7472:
+    GLint enabled = 0;
+    glGetVertexAttribiv(0, GL_VERTEX_ATTRIB_ARRAY_ENABLED, &enabled);
+    assert(enabled == 0);
 
     // Test that deleting the context works.
     res = emscripten_webgl_destroy_context(context);

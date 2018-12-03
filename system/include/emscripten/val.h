@@ -1,3 +1,10 @@
+/*
+ * Copyright 2012 The Emscripten Authors.  All rights reserved.
+ * Emscripten is available under two separate licenses, the MIT license and the
+ * University of Illinois/NCSA Open Source License.  Both these licenses can be
+ * found in the LICENSE file.
+ */
+
 #pragma once
 
 #if __cplusplus < 201103L
@@ -63,6 +70,7 @@ namespace emscripten {
             bool _emval_strictly_equals(EM_VAL first, EM_VAL second);
             bool _emval_greater_than(EM_VAL first, EM_VAL second);
             bool _emval_less_than(EM_VAL first, EM_VAL second);
+            bool _emval_not(EM_VAL object);
 
             EM_VAL _emval_call(
                 EM_VAL value,
@@ -90,6 +98,7 @@ namespace emscripten {
             bool _emval_instanceof(EM_VAL object, EM_VAL constructor);
             bool _emval_in(EM_VAL item, EM_VAL object);
             bool _emval_delete(EM_VAL object, EM_VAL property);
+            bool _emval_throw(EM_VAL object);
         }
 
         template<const char* address>
@@ -275,7 +284,7 @@ namespace emscripten {
     class val {
     public:
         // missing operators:
-        // * ! ~ - + ++ --
+        // * ~ - + ++ --
         // * * / %
         // * + -
         // * << >> >>>
@@ -419,16 +428,20 @@ namespace emscripten {
             return internal::_emval_greater_than(handle, v.handle);
         }
 
-        bool operator>= (const val& v) const {
+        bool operator>=(const val& v) const {
             return (*this > v) || (*this == v);
         }
 
-        bool operator< (const val& v) const {
+        bool operator<(const val& v) const {
             return internal::_emval_less_than(handle, v.handle);
         }
 
-        bool operator<= (const val& v) const {
+        bool operator<=(const val& v) const {
             return (*this < v) || (*this == v);
+        }
+
+        bool operator!() const {
+            return internal::_emval_not(handle);
         }
 
         template<typename... Args>
@@ -502,6 +515,10 @@ namespace emscripten {
         template<typename T>
         bool delete_(const T& property) const {
             return internal::_emval_delete(handle, val(property).handle);
+        }
+
+        void throw_() const {
+            internal::_emval_throw(handle);
         }
 
     private:

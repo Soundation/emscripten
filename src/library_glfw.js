@@ -1,4 +1,9 @@
-/*******************************************************************************
+/*
+ * Copyright 2013 The Emscripten Authors.  All rights reserved.
+ * Emscripten is available under two separate licenses, the MIT license and the
+ * University of Illinois/NCSA Open Source License.  Both these licenses can be
+ * found in the LICENSE file.
+ *
  * EMSCRIPTEN GLFW 2.x-3.x emulation.
  * It tries to emulate the behavior described in
  * http://www.glfw.org/docs/latest/
@@ -27,8 +32,7 @@
  * - Jari Vetoniemi <mailroxas@gmail.com>
  * - Éloi Rivard <eloi.rivard@gmail.com>
  * - Thomas Borsos <thomasborsos@gmail.com>
- *
- ******************************************************************************/
+ */
 
 var LibraryGLFW = {
   $GLFW__deps: ['emscripten_get_now', '$GL', '$Browser'],
@@ -996,6 +1000,10 @@ var LibraryGLFW = {
           stencil: (GLFW.hints[0x00021006] > 0),   // GLFW_STENCIL_BITS
           alpha: (GLFW.hints[0x00021004] > 0)      // GLFW_ALPHA_BITS 
         }
+#if OFFSCREEN_FRAMEBUFFER
+        // TODO: Make GLFW explicitly aware of whether it is being proxied or not, and set these to true only when proxying is being performed.
+        GL.enableOffscreenFramebufferAttributes(contextAttributes);
+#endif
         Module.ctx = Browser.createContext(Module['canvas'], true, true, contextAttributes);
       }
 

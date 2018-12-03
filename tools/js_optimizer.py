@@ -1,8 +1,21 @@
+# Copyright 2012 The Emscripten Authors.  All rights reserved.
+# Emscripten is available under two separate licenses, the MIT license and the
+# University of Illinois/NCSA Open Source License.  Both these licenses can be
+# found in the LICENSE file.
 
 from __future__ import print_function
-import os, sys, subprocess, multiprocessing, re, string, json, shutil, logging
+import os
+import sys
+import subprocess
+import multiprocessing
+import re
+import string
+import json
+import shutil
+import logging
 
-sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+__rootpath__ = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
+sys.path.insert(1, __rootpath__)
 
 from tools.toolchain_profiler import ToolchainProfiler
 if __name__ == '__main__':
@@ -17,7 +30,6 @@ except ImportError:
 configuration = shared.configuration
 temp_files = configuration.get_temp_files()
 
-__rootpath__ = os.path.abspath(os.path.dirname(os.path.dirname(__file__)))
 def path_from_root(*pathelems):
   return os.path.join(__rootpath__, *pathelems)
 
@@ -56,18 +68,16 @@ def split_funcs(js, just_split=False):
   return funcs
 
 def get_native_optimizer():
-  if os.environ.get('EMCC_FAST_COMPILER') == '0':
-    logging.critical('Non-fastcomp compiler is no longer available, please use fastcomp or an older version of emscripten')
-    sys.exit(1)
-
-  # Allow users to override the location of the optimizer executable by setting an environment variable EMSCRIPTEN_NATIVE_OPTIMIZER=/path/to/optimizer(.exe)
-  opt = os.environ.get('EMSCRIPTEN_NATIVE_OPTIMIZER', '')
-  if len(opt):
+  # Allow users to override the location of the optimizer executable by setting
+  # an environment variable EMSCRIPTEN_NATIVE_OPTIMIZER=/path/to/optimizer(.exe)
+  opt = os.environ.get('EMSCRIPTEN_NATIVE_OPTIMIZER')
+  if opt:
     logging.debug('env forcing native optimizer at ' + opt)
     return opt
-  # Also, allow specifying the location of the optimizer in .emscripten configuration file under EMSCRIPTEN_NATIVE_OPTIMIZER='/path/to/optimizer'
-  opt = getattr(shared, 'EMSCRIPTEN_NATIVE_OPTIMIZER', '')
-  if len(opt):
+  # Also, allow specifying the location of the optimizer in .emscripten
+  # configuration file under EMSCRIPTEN_NATIVE_OPTIMIZER='/path/to/optimizer'
+  opt = shared.EMSCRIPTEN_NATIVE_OPTIMIZER
+  if opt:
     logging.debug('config forcing native optimizer at ' + opt)
     return opt
 
@@ -280,7 +290,7 @@ def run_on_chunk(command):
       while os.path.exists(saved): saved = 'input' + str(int(saved.replace('input', '').replace('.txt', ''))+1) + '.txt'
       print('running js optimizer command', ' '.join([c if c != filename else saved for c in command]), file=sys.stderr)
       shutil.copyfile(filename, os.path.join(shared.get_emscripten_temp_dir(), saved))
-    if shared.EM_BUILD_VERBOSE_LEVEL >= 3: print('run_on_chunk: ' + str(command), file=sys.stderr)
+    if shared.EM_BUILD_VERBOSE >= 3: print('run_on_chunk: ' + str(command), file=sys.stderr)
     proc = shared.run_process(command, stdout=subprocess.PIPE)
     output = proc.stdout
     assert proc.returncode == 0, 'Error in optimizer (return code ' + str(proc.returncode) + '): ' + output
@@ -579,5 +589,5 @@ if __name__ == '__main__':
     shutil.copyfile(out, sys.argv[1] + '.jsopt.js')
   except Exception as e:
     ToolchainProfiler.record_process_exit(1)
-    raise e
+    raise
   ToolchainProfiler.record_process_exit(0)

@@ -1,3 +1,8 @@
+// Copyright 2013 The Emscripten Authors.  All rights reserved.
+// Emscripten is available under two separate licenses, the MIT license and the
+// University of Illinois/NCSA Open Source License.  Both these licenses can be
+// found in the LICENSE file.
+
 mergeInto(LibraryManager.library, {
   $TTY__deps: ['$FS'],
   $TTY__postset: '__ATINIT__.unshift(function() { TTY.init() });' +
@@ -73,12 +78,12 @@ mergeInto(LibraryManager.library, {
         if (!stream.tty || !stream.tty.ops.put_char) {
           throw new FS.ErrnoError(ERRNO_CODES.ENXIO);
         }
-        for (var i = 0; i < length; i++) {
-          try {
+        try {
+          for (var i = 0; i < length; i++) {
             stream.tty.ops.put_char(stream.tty, buffer[offset+i]);
-          } catch (e) {
-            throw new FS.ErrnoError(ERRNO_CODES.EIO);
           }
+        } catch (e) {
+          throw new FS.ErrnoError(ERRNO_CODES.EIO);
         }
         if (length) {
           stream.node.timestamp = Date.now();
