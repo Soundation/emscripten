@@ -574,13 +574,13 @@ See the `library_*.js`_ files for other examples.
 
    - JavaScript libraries can declare dependencies (``__deps``), however
      those are only for other JavaScript libraries. See examples in
-     `/src <https://github.com/kripken/emscripten/tree/master/src>`_
+     `/src <https://github.com/emscripten-core/emscripten/tree/master/src>`_
      with the name format **library_*.js**
    - You can add dependencies for all your methods using
      ``autoAddDeps(myLibrary, name)`` where myLibrary is the object with
      all your methods, and ``name`` is the thing they all depend upon.
      This is useful when all the implemented methods use a JavaScript
-     singleton containing helper methods. See ``library_gl.js`` for
+     singleton containing helper methods. See ``library_webgl.js`` for
      an example.
    - If a JavaScript library depends on a compiled C library (like most
      of *libc*), you must edit `src/deps_info.json`_. Search for
@@ -624,7 +624,7 @@ space for 20 functions to be added::
 
    For example, if you add a function that takes an integer and does not return
    anything, you can do ``addFunction(your_function, 'vi');``. See
-   `tests/interop/test_add_function_post.js <https://github.com/kripken/emscripten/blob/incoming/tests/interop/test_add_function_post.js>`_ for an example.
+   `tests/interop/test_add_function_post.js <https://github.com/emscripten-core/emscripten/blob/incoming/tests/interop/test_add_function_post.js>`_ for an example.
 
 
 .. _interacting-with-code-access-memory:
@@ -738,13 +738,13 @@ for defining the binding:
    of one tool over the other will usually be based on which is the most
    natural fit for the project and its build system.
 
-.. _library.js: https://github.com/kripken/emscripten/blob/master/src/library.js
-.. _test_js_libraries: https://github.com/kripken/emscripten/blob/1.29.12/tests/test_core.py#L5043
-.. _src/deps_info.json: https://github.com/kripken/emscripten/blob/master/src/deps_info.json
-.. _tools/system_libs.py: https://github.com/kripken/emscripten/blob/master/tools/system_libs.py
-.. _library_\*.js: https://github.com/kripken/emscripten/tree/master/src
-.. _test_add_function in tests/test_core.py: https://github.com/kripken/emscripten/blob/1.29.12/tests/test_core.py#L6237
-.. _tests/core/test_utf.in: https://github.com/kripken/emscripten/blob/master/tests/core/test_utf.in
-.. _tests/test_core.py: https://github.com/kripken/emscripten/blob/1.29.12/tests/test_core.py#L4597
+.. _library.js: https://github.com/emscripten-core/emscripten/blob/master/src/library.js
+.. _test_js_libraries: https://github.com/emscripten-core/emscripten/blob/1.29.12/tests/test_core.py#L5043
+.. _src/deps_info.json: https://github.com/emscripten-core/emscripten/blob/master/src/deps_info.json
+.. _tools/system_libs.py: https://github.com/emscripten-core/emscripten/blob/master/tools/system_libs.py
+.. _library_\*.js: https://github.com/emscripten-core/emscripten/tree/master/src
+.. _test_add_function in tests/test_core.py: https://github.com/emscripten-core/emscripten/blob/1.29.12/tests/test_core.py#L6237
+.. _tests/core/test_utf.in: https://github.com/emscripten-core/emscripten/blob/master/tests/core/test_utf.in
+.. _tests/test_core.py: https://github.com/emscripten-core/emscripten/blob/1.29.12/tests/test_core.py#L4597
 .. _Box2D: https://github.com/kripken/box2d.js/#box2djs
 .. _Bullet: https://github.com/kripken/ammo.js/#ammojs

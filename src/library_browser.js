@@ -244,7 +244,7 @@ var LibraryBrowser = {
         // promises to run in series.
         this['asyncWasmLoadPromise'] = this['asyncWasmLoadPromise'].then(
           function() {
-            return loadWebAssemblyModule(byteArray, true);
+            return loadWebAssemblyModule(byteArray, {loadAsync: true, nodelete: true});
           }).then(
             function(module) {
               Module['preloadedWasm'][name] = module;
@@ -309,7 +309,12 @@ var LibraryBrowser = {
         // For GLES2/desktop GL compatibility, adjust a few defaults to be different to WebGL defaults, so that they align better with the desktop defaults.
         var contextAttributes = {
           antialias: false,
-          alpha: false
+          alpha: false,
+#if USE_WEBGL2 // library_browser.js defaults: use the WebGL version chosen at compile time (unless overridden below)
+          majorVersion: (typeof WebGL2RenderingContext !== 'undefined') ? 2 : 1,
+#else
+          majorVersion: 1,
+#endif
         };
 
         if (webGLContextAttributes) {
@@ -318,9 +323,14 @@ var LibraryBrowser = {
           }
         }
 
-        contextHandle = GL.createContext(canvas, contextAttributes);
-        if (contextHandle) {
-          ctx = GL.getContext(contextHandle).GLctx;
+        // This check of existence of GL is here to satisfy Closure compiler, which yells if variable GL is referenced below but GL object is not
+        // actually compiled in because application is not doing any GL operations. TODO: Ideally if GL is not being used, this function
+        // Browser.createContext() should not even be emitted.
+        if (typeof GL !== 'undefined') {
+          contextHandle = GL.createContext(canvas, contextAttributes);
+          if (contextHandle) {
+            ctx = GL.getContext(contextHandle).GLctx;
+          }
         }
       } else {
         ctx = canvas.getContext('2d');
@@ -549,23 +559,43 @@ var LibraryBrowser = {
     },
 
     // Browsers specify wheel direction according to the page CSS pixel Y direction:
-    // Scrolling mouse wheel down (==towards user/away from screen) on Windows/Linux (and OSX without 'natural scroll' enabled)
+    // Scrolling mouse wheel down (==towards user/away from screen) on Windows/Linux (and macOS without 'natural scroll' enabled)
     // is the positive wheel direction. Scrolling mouse wheel up (towards the screen) is the negative wheel direction.
     // This function returns the wheel direction in the browser page coordinate system (+: down, -: up). Note that this is often the
     // opposite of native code: In native APIs the positive scroll direction is to scroll up (away from the user).
     // NOTE: The mouse wheel delta is a decimal number, and can be a fractional value within -1 and 1. If you need to represent
     //       this as an integer, don't simply cast to int, or you may receive scroll events for wheel delta == 0.
+    // NOTE: We convert all units returned by events into steps, i.e. individual wheel notches.
+    //       These conversions are only approximations. Changing browsers, operating systems, or even settings can change the values.
     getMouseWheelDelta: function(event) {
       var delta = 0;
       switch (event.type) {
         case 'DOMMouseScroll':
-          delta = event.detail;
+          // 3 lines make up a step
+          delta = event.detail / 3;
           break;
         case 'mousewheel':
-          delta = event.wheelDelta;
+          // 120 units make up a step
+          delta = event.wheelDelta / 120;
           break;
         case 'wheel':
-          delta = event['deltaY'];
+          delta = event.deltaY
+          switch(event.deltaMode) {
+            case 0:
+              // DOM_DELTA_PIXEL: 100 pixels make up a step
+              delta /= 100;
+              break;
+            case 1:
+              // DOM_DELTA_LINE: 3 lines make up a step
+              delta /= 3;
+              break;
+            case 2:
+              // DOM_DELTA_PAGE: A page makes up 80 steps
+              delta *= 80;
+              break;
+            default:
+              throw 'unrecognized mouse wheel delta mode: ' + event.deltaMode;
+          }
           break;
         default:
           throw 'unrecognized mouse wheel event: ' + event.type;
@@ -780,13 +810,13 @@ var LibraryBrowser = {
   emscripten_async_wget: function(url, file, onload, onerror) {
     Module['noExitRuntime'] = true;
 
-    var _url = Pointer_stringify(url);
-    var _file = Pointer_stringify(file);
+    var _url = UTF8ToString(url);
+    var _file = UTF8ToString(file);
     _file = PATH.resolve(FS.cwd(), _file);
     function doCallback(callback) {
       if (callback) {
         var stack = stackSave();
-        Module['dynCall_vi'](callback, allocate(intArrayFromString(_file), 'i8', ALLOC_STACK));
+        {{{ makeDynCall('vi') }}}(callback, allocate(intArrayFromString(_file), 'i8', ALLOC_STACK));
         stackRestore(stack);
       }
     }
@@ -817,13 +847,13 @@ var LibraryBrowser = {
   emscripten_async_wget_data__proxy: 'sync',
   emscripten_async_wget_data__sig: 'viiii',
   emscripten_async_wget_data: function(url, arg, onload, onerror) {
-    Browser.asyncLoad(Pointer_stringify(url), function(byteArray) {
+    Browser.asyncLoad(UTF8ToString(url), function(byteArray) {
       var buffer = _malloc(byteArray.length);
       HEAPU8.set(byteArray, buffer);
-      Module['dynCall_viii'](onload, arg, buffer, byteArray.length);
+      {{{ makeDynCall('viii') }}}(onload, arg, buffer, byteArray.length);
       _free(buffer);
     }, function() {
-      if (onerror) Module['dynCall_vi'](onerror, arg);
+      if (onerror) {{{ makeDynCall('vi') }}}(onerror, arg);
     }, true /* no need for run dependency, this is async but will not do any prepare etc. step */ );
   },
 
@@ -832,11 +862,11 @@ var LibraryBrowser = {
   emscripten_async_wget2: function(url, file, request, param, arg, onload, onerror, onprogress) {
     Module['noExitRuntime'] = true;
 
-    var _url = Pointer_stringify(url);
-    var _file = Pointer_stringify(file);
+    var _url = UTF8ToString(url);
+    var _file = UTF8ToString(file);
     _file = PATH.resolve(FS.cwd(), _file);
-    var _request = Pointer_stringify(request);
-    var _param = Pointer_stringify(param);
+    var _request = UTF8ToString(request);
+    var _param = UTF8ToString(param);
     var index = _file.lastIndexOf('/');
 
     var http = new XMLHttpRequest();
@@ -860,11 +890,11 @@ var LibraryBrowser = {
         FS.createDataFile( _file.substr(0, index), _file.substr(index + 1), new Uint8Array(http.response), true, true, false);
         if (onload) {
           var stack = stackSave();
-          Module['dynCall_viii'](onload, handle, arg, allocate(intArrayFromString(_file), 'i8', ALLOC_STACK));
+          {{{ makeDynCall('viii') }}}(onload, handle, arg, allocate(intArrayFromString(_file), 'i8', ALLOC_STACK));
           stackRestore(stack);
         }
       } else {
-        if (onerror) Module['dynCall_viii'](onerror, handle, arg, http.status);
+        if (onerror) {{{ makeDynCall('viii') }}}(onerror, handle, arg, http.status);
       }
 
       delete Browser.wgetRequests[handle];
@@ -872,7 +902,7 @@ var LibraryBrowser = {
 
     // ERROR
     http.onerror = function http_onerror(e) {
-      if (onerror) Module['dynCall_viii'](onerror, handle, arg, http.status);
+      if (onerror) {{{ makeDynCall('viii') }}}(onerror, handle, arg, http.status);
       delete Browser.wgetRequests[handle];
     };
 
@@ -880,7 +910,7 @@ var LibraryBrowser = {
     http.onprogress = function http_onprogress(e) {
       if (e.lengthComputable || (e.lengthComputable === undefined && e.total != 0)) {
         var percentComplete = (e.loaded / e.total)*100;
-        if (onprogress) Module['dynCall_viii'](onprogress, handle, arg, percentComplete);
+        if (onprogress) {{{ makeDynCall('viii') }}}(onprogress, handle, arg, percentComplete);
       }
     };
 
@@ -905,9 +935,9 @@ var LibraryBrowser = {
   emscripten_async_wget2_data__proxy: 'sync',
   emscripten_async_wget2_data__sig: 'iiiiiiiii',
   emscripten_async_wget2_data: function(url, request, param, arg, free, onload, onerror, onprogress) {
-    var _url = Pointer_stringify(url);
-    var _request = Pointer_stringify(request);
-    var _param = Pointer_stringify(param);
+    var _url = UTF8ToString(url);
+    var _request = UTF8ToString(request);
+    var _param = UTF8ToString(param);
 
     var http = new XMLHttpRequest();
     http.open(_request, _url, true);
@@ -921,10 +951,10 @@ var LibraryBrowser = {
         var byteArray = new Uint8Array(http.response);
         var buffer = _malloc(byteArray.length);
         HEAPU8.set(byteArray, buffer);
-        if (onload) Module['dynCall_viiii'](onload, handle, arg, buffer, byteArray.length);
+        if (onload) {{{ makeDynCall('viiii') }}}(onload, handle, arg, buffer, byteArray.length);
         if (free) _free(buffer);
       } else {
-        if (onerror) Module['dynCall_viiii'](onerror, handle, arg, http.status, http.statusText);
+        if (onerror) {{{ makeDynCall('viiii') }}}(onerror, handle, arg, http.status, http.statusText);
       }
       delete Browser.wgetRequests[handle];
     };
@@ -932,14 +962,14 @@ var LibraryBrowser = {
     // ERROR
     http.onerror = function http_onerror(e) {
       if (onerror) {
-        Module['dynCall_viiii'](onerror, handle, arg, http.status, http.statusText);
+        {{{ makeDynCall('viiii') }}}(onerror, handle, arg, http.status, http.statusText);
       }
       delete Browser.wgetRequests[handle];
     };
 
     // PROGRESS
     http.onprogress = function http_onprogress(e) {
-      if (onprogress) Module['dynCall_viiii'](onprogress, handle, arg, e.loaded, e.lengthComputable || e.lengthComputable === undefined ? e.total : 0);
+      if (onprogress) {{{ makeDynCall('viiii') }}}(onprogress, handle, arg, e.loaded, e.lengthComputable || e.lengthComputable === undefined ? e.total : 0);
     };
 
     // ABORT
@@ -975,7 +1005,7 @@ var LibraryBrowser = {
   emscripten_run_preload_plugins: function(file, onload, onerror) {
     Module['noExitRuntime'] = true;
 
-    var _file = Pointer_stringify(file);
+    var _file = UTF8ToString(file);
     var data = FS.analyzePath(_file);
     if (!data.exists) return -1;
     FS.createPreloadedFile(
@@ -983,10 +1013,10 @@ var LibraryBrowser = {
       PATH.basename(_file),
       new Uint8Array(data.object.contents), true, true,
       function() {
-        if (onload) Module['dynCall_vi'](onload, file);
+        if (onload) {{{ makeDynCall('vi') }}}(onload, file);
       },
       function() {
-        if (onerror) Module['dynCall_vi'](onerror, file);
+        if (onerror) {{{ makeDynCall('vi') }}}(onerror, file);
       },
       true // don'tCreateFile - it's already there
     );
@@ -998,7 +1028,7 @@ var LibraryBrowser = {
   emscripten_run_preload_plugins_data: function(data, size, suffix, arg, onload, onerror) {
     Module['noExitRuntime'] = true;
 
-    var _suffix = Pointer_stringify(suffix);
+    var _suffix = UTF8ToString(suffix);
     if (!Browser.asyncPrepareDataCounter) Browser.asyncPrepareDataCounter = 0;
     var name = 'prepare_data_' + (Browser.asyncPrepareDataCounter++) + '.' + _suffix;
     var lengthAsUTF8 = lengthBytesUTF8(name);
@@ -1010,10 +1040,10 @@ var LibraryBrowser = {
       {{{ makeHEAPView('U8', 'data', 'data + size') }}},
       true, true,
       function() {
-        if (onload) Module['dynCall_vii'](onload, arg, cname);
+        if (onload) {{{ makeDynCall('vii') }}}(onload, arg, cname);
       },
       function() {
-        if (onerror) Module['dynCall_vi'](onerror, arg);
+        if (onerror) {{{ makeDynCall('vi') }}}(onerror, arg);
       },
       true // don'tCreateFile - it's already there
     );
@@ -1037,7 +1067,7 @@ var LibraryBrowser = {
 
 #if USE_PTHREADS
     if (ENVIRONMENT_IS_PTHREAD) {
-      console.error('emscripten_async_load_script("' + Pointer_stringify(url) + '") failed, emscripten_async_load_script is currently not available in pthreads!');
+      console.error('emscripten_async_load_script("' + UTF8ToString(url) + '") failed, emscripten_async_load_script is currently not available in pthreads!');
       return onerror ? onerror() : undefined;
     }
 #endif
@@ -1055,7 +1085,7 @@ var LibraryBrowser = {
       };
     }
     if (onerror) script.onerror = onerror;
-    script.src = Pointer_stringify(url);
+    script.src = UTF8ToString(url);
     document.body.appendChild(script);
   },
 
@@ -1093,7 +1123,7 @@ var LibraryBrowser = {
         // Emulate setImmediate. (note: not a complete polyfill, we don't emulate clearImmediate() to keep code size to minimum, since not needed)
         var setImmediates = [];
         var emscriptenMainLoopMessageId = 'setimmediate';
-        function Browser_setImmediate_messageHandler(event) {
+        var Browser_setImmediate_messageHandler = function(event) {
           // When called in current thread or Worker, the main loop ID is structured slightly different to accommodate for --proxy-to-worker runtime listening to Worker events,
           // so check for both cases.
           if (event.data === emscriptenMainLoopMessageId || event.data.target === emscriptenMainLoopMessageId) {
@@ -1188,19 +1218,17 @@ var LibraryBrowser = {
 
       // Signal GL rendering layer that processing of a new frame is about to start. This helps it optimize
       // VBO double-buffering and reduce GPU stalls.
-#if USES_GL_EMULATION
+#if FULL_ES2 || LEGACY_GL_EMULATION
       GL.newRenderingFrameStarted();
 #endif
 
-#if USE_PTHREADS
-#if OFFSCREEN_FRAMEBUFFER
+#if USE_PTHREADS && OFFSCREEN_FRAMEBUFFER && GL_SUPPORT_EXPLICIT_SWAP_CONTROL
       // If the current GL context is a proxied regular WebGL context, and was initialized with implicit swap mode on the main thread, and we are on the parent thread,
       // perform the swap on behalf of the user.
       if (typeof GL !== 'undefined' && GL.currentContext && GL.currentContextIsProxied) {
         var explicitSwapControl = {{{ makeGetValue('GL.currentContext', 0, 'i32') }}};
         if (!explicitSwapControl) _emscripten_webgl_commit_frame();
       }
-#endif
 #endif
 
 #if OFFSCREENCANVAS_SUPPORT
@@ -1270,16 +1298,16 @@ var LibraryBrowser = {
   // Runs natively in pthread, no __proxy needed.
   _emscripten_push_main_loop_blocker: function(func, arg, name) {
     Browser.mainLoop.queue.push({ func: function() {
-      Module['dynCall_vi'](func, arg);
-    }, name: Pointer_stringify(name), counted: true });
+      {{{ makeDynCall('vi') }}}(func, arg);
+    }, name: UTF8ToString(name), counted: true });
     Browser.mainLoop.updateStatus();
   },
 
   // Runs natively in pthread, no __proxy needed.
   _emscripten_push_uncounted_main_loop_blocker: function(func, arg, name) {
     Browser.mainLoop.queue.push({ func: function() {
-      Module['dynCall_vi'](func, arg);
-    }, name: Pointer_stringify(name), counted: false });
+      {{{ makeDynCall('vi') }}}(func, arg);
+    }, name: UTF8ToString(name), counted: false });
     Browser.mainLoop.updateStatus();
   },
 
@@ -1323,12 +1351,6 @@ var LibraryBrowser = {
     exit(status);
   },
 
-  emscripten_get_device_pixel_ratio__proxy: 'sync',
-  emscripten_get_device_pixel_ratio__sig: 'd',
-  emscripten_get_device_pixel_ratio: function() {
-    return window.devicePixelRatio || 1.0;
-  },
-
   emscripten_hide_mouse__proxy: 'sync',
   emscripten_hide_mouse__sig: 'v',
   emscripten_hide_mouse: function() {
@@ -1362,7 +1384,7 @@ var LibraryBrowser = {
   emscripten_create_worker__proxy: 'sync',
   emscripten_create_worker__sig: 'ii',
   emscripten_create_worker: function(url) {
-    url = Pointer_stringify(url);
+    url = UTF8ToString(url);
     var id = Browser.workers.length;
     var info = {
       worker: new Worker(url),
@@ -1415,7 +1437,7 @@ var LibraryBrowser = {
   emscripten_call_worker: function(id, funcName, data, size, callback, arg) {
     Module['noExitRuntime'] = true; // should we only do this if there is a callback?
 
-    funcName = Pointer_stringify(funcName);
+    funcName = UTF8ToString(funcName);
     var info = Browser.workers[id];
     var callbackId = -1;
     if (callback) {
@@ -1483,9 +1505,7 @@ var LibraryBrowser = {
   emscripten_get_preloaded_image_data__proxy: 'sync',
   emscripten_get_preloaded_image_data__sig: 'iiii',
   emscripten_get_preloaded_image_data: function(path, w, h) {
-    if (typeof path === "number") {
-      path = Pointer_stringify(path);
-    }
+    if ((path | 0) === path) path = UTF8ToString(path);
 
     path = PATH.resolve(path);
 

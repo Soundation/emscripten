@@ -55,6 +55,8 @@ def make_fake_clang(filename, version):
   """Create a fake clang that only handles --version
   --version writes to stdout (unlike -v which writes to stderr)
   """
+  if not os.path.exists(os.path.dirname(filename)):
+    os.makedirs(os.path.dirname(filename))
   with open(filename, 'w') as f:
     f.write('#!/bin/sh\n')
     f.write('echo "clang version %s"\n' % version)
@@ -68,6 +70,8 @@ def make_fake_llc(filename, targets):
   """Create a fake llc that only handles --version and writes target
   list to stdout.
   """
+  if not os.path.exists(os.path.dirname(filename)):
+    os.makedirs(os.path.dirname(filename))
   with open(filename, 'w') as f:
     f.write('#!/bin/sh\n')
     f.write('echo "llc fake output\nRegistered Targets:\n%s"' % targets)
@@ -211,7 +215,7 @@ class sanity(RunnerCore):
         if 'LLVM_ROOT' not in settings:
           self.assertContained('Error in evaluating %s' % EM_CONFIG, output)
         elif 'runner.py' not in ' '.join(command):
-          self.assertContained('CRITICAL', output) # sanity check should fail
+          self.assertContained('ERROR', output) # sanity check should fail
 
   def test_closure_compiler(self):
     CLOSURE_FATAL = 'fatal: closure compiler'
@@ -247,7 +251,7 @@ class sanity(RunnerCore):
     restore_and_set_up()
 
     # Clang should report the version number we expect, and emcc should not warn
-    assert shared.check_clang_version()
+    assert shared.check_llvm_version()
     output = self.check_working(EMCC)
     assert LLVM_WARNING not in output, output
 
@@ -255,9 +259,6 @@ class sanity(RunnerCore):
     restore_and_set_up()
     with open(CONFIG_FILE, 'a') as f:
       f.write('LLVM_ROOT = "' + path_from_root('tests', 'fake') + '"')
-
-    if not os.path.exists(path_from_root('tests', 'fake')):
-      os.makedirs(path_from_root('tests', 'fake'))
 
     with env_modify({'EM_IGNORE_SANITY': '1'}):
       for x in range(-2, 3):
@@ -288,7 +289,6 @@ class sanity(RunnerCore):
 
   def test_llvm_fastcomp(self):
     WARNING = 'fastcomp in use, but LLVM has not been built with the JavaScript backend as a target'
-    WARNING2 = 'you can fall back to the older (pre-fastcomp) compiler core, although that is not recommended, see http://kripken.github.io/emscripten-site/docs/building_from_source/LLVM-Backend.html'
 
     restore_and_set_up()
 
@@ -296,7 +296,6 @@ class sanity(RunnerCore):
     self.assertTrue(shared.check_llvm())
     output = self.check_working(EMCC)
     self.assertNotIn(WARNING, output)
-    self.assertNotIn(WARNING2, output)
 
     # Fake incorrect llc output, no mention of js backend
     restore_and_set_up()
@@ -304,21 +303,17 @@ class sanity(RunnerCore):
       f.write('LLVM_ROOT = "' + path_from_root('tests', 'fake', 'bin') + '"')
     # print '1', open(CONFIG_FILE).read()
 
-    try_delete(path_from_root('tests', 'fake'))
-    os.makedirs(path_from_root('tests', 'fake', 'bin'))
-
+    make_fake_clang(path_from_root('tests', 'fake', 'bin', 'clang'), expected_llvm_version())
     make_fake_llc(path_from_root('tests', 'fake', 'bin', 'llc'), 'no j-s backend for you!')
     self.check_working(EMCC, WARNING)
-    self.check_working(EMCC, WARNING2)
 
     # fake some more
-    for fake in ['llvm-link', 'clang', 'clang++', 'llvm-ar', 'opt', 'llvm-as', 'llvm-dis', 'llvm-nm', 'lli']:
+    for fake in ['llvm-link', 'llvm-ar', 'opt', 'llvm-as', 'llvm-dis', 'llvm-nm', 'lli']:
       open(path_from_root('tests', 'fake', 'bin', fake), 'w').write('.')
     try_delete(SANITY_FILE)
     self.check_working(EMCC, WARNING)
     # make sure sanity checks notice there is no source dir with version #
     make_fake_llc(path_from_root('tests', 'fake', 'bin', 'llc'), 'there IZ a js backend: JavaScript (asm.js, emscripten) backend')
-    make_fake_clang(path_from_root('tests', 'fake', 'bin', 'clang'), expected_llvm_version())
     try_delete(SANITY_FILE)
     self.check_working(EMCC, 'clang version does not appear to include fastcomp')
 
@@ -331,7 +326,7 @@ class sanity(RunnerCore):
 
     restore_and_set_up()
 
-    self.check_working([EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'ASM_JS=0'], '''Compiler settings are incompatible with fastcomp. You can fall back to the older compiler core, although that is not recommended''')
+    self.check_working([EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'ASM_JS=0'], '''Very old compiler settings (pre-fastcomp) are no longer supported.''')
 
   def test_node(self):
     NODE_WARNING = 'node version appears too old'
@@ -349,9 +344,6 @@ class sanity(RunnerCore):
     f = open(CONFIG_FILE, 'a')
     f.write('NODE_JS = "' + path_from_root('tests', 'fake', 'nodejs') + '"')
     f.close()
-
-    if not os.path.exists(path_from_root('tests', 'fake')):
-      os.makedirs(path_from_root('tests', 'fake'))
 
     with env_modify({'EM_IGNORE_SANITY': '1'}):
       for version, succeed in [('v0.8.0', False),
@@ -467,7 +459,7 @@ fi
     with env_modify({'EMCC_DEBUG': '1'}):
       # Building a file that *does* need something *should* trigger cache
       # generation, but only the first time
-      for filename, libname in [('hello_libcxx.cpp', 'libcxx')]:
+      for filename, libname in [('hello_libcxx.cpp', 'libc++')]:
         for i in range(3):
           print(filename, libname, i)
           self.clear()
@@ -475,13 +467,13 @@ fi
           # print '\n\n\n', output
           assert INCLUDING_MESSAGE.replace('X', libname) in output
           if libname == 'libc':
-            assert INCLUDING_MESSAGE.replace('X', 'libcxx') not in output # we don't need libcxx in this code
+            assert INCLUDING_MESSAGE.replace('X', 'libc++') not in output # we don't need libc++ in this code
           else:
-            assert INCLUDING_MESSAGE.replace('X', 'libc') in output # libcxx always forces inclusion of libc
+            assert INCLUDING_MESSAGE.replace('X', 'libc') in output # libc++ always forces inclusion of libc
           assert (BUILDING_MESSAGE.replace('X', libname) in output) == (i == 0), 'Must only build the first time'
           self.assertContained('hello, world!', run_js('a.out.js'))
           assert os.path.exists(EMCC_CACHE)
-          full_libname = libname + '.bc' if libname != 'libcxx' else libname + '.a'
+          full_libname = libname + '.bc' if libname != 'libc++' else libname + '.a'
           assert os.path.exists(os.path.join(EMCC_CACHE, full_libname))
 
     try_delete(CANONICAL_TEMP_DIR)
@@ -502,7 +494,8 @@ fi
 
     # Changing LLVM_ROOT, even without altering .emscripten, clears the cache
     ensure_cache()
-    with env_modify({'LLVM': 'waka'}):
+    make_fake_clang(path_from_root('tests', 'fake', 'bin', 'clang'), expected_llvm_version())
+    with env_modify({'LLVM': path_from_root('tests', 'fake', 'bin')}):
       self.assertTrue(os.path.exists(EMCC_CACHE))
       output = self.do([PYTHON, EMCC])
       self.assertIn(ERASING_MESSAGE, output)
@@ -713,74 +706,6 @@ fi
 
     try_delete(CANONICAL_TEMP_DIR)
 
-  def test_embuilder(self):
-    restore_and_set_up()
-
-    tests = [
-      ([PYTHON, EMBUILDER], ['Emscripten System Builder Tool', 'build libc', 'native_optimizer'], True, []),
-      ([PYTHON, EMBUILDER, 'build', 'waka'], 'ERROR', False, []),
-      ([PYTHON, EMBUILDER, 'build', 'struct_info'], ['building and verifying struct_info', 'success'], True, ['generated_struct_info.json']),
-      ([PYTHON, EMBUILDER, 'build', 'libc'], ['building and verifying libc', 'success'], True, ['libc.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'libc-mt'], ['building and verifying libc-mt', 'success'], True, ['libc-mt.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'libc-extras'], ['building and verifying libc-extras', 'success'], True, ['libc-extras.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'dlmalloc'], ['building and verifying dlmalloc', 'success'], True, ['dlmalloc.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'dlmalloc_debug'], ['building and verifying dlmalloc', 'success'], True, ['dlmalloc_debug.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'dlmalloc_threadsafe'], ['building and verifying dlmalloc_threadsafe', 'success'], True, ['dlmalloc_threadsafe.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'dlmalloc_threadsafe_debug'], ['building and verifying dlmalloc', 'success'], True, ['dlmalloc_threadsafe_debug.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'emmalloc'], ['building and verifying emmalloc', 'success'], True, ['emmalloc.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'emmalloc_debug'], ['building and verifying emmalloc', 'success'], True, ['emmalloc_debug.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'pthreads'], ['building and verifying pthreads', 'success'], True, ['pthreads.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'libcxx'], ['success'], True, ['libcxx.a']),
-      ([PYTHON, EMBUILDER, 'build', 'libcxx_noexcept'], ['success'], True, ['libcxx_noexcept.a']),
-      ([PYTHON, EMBUILDER, 'build', 'libcxxabi'], ['success'], True, ['libcxxabi.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'gl'], ['success'], True, ['gl.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'native_optimizer'], ['success'], True, ['optimizer.2.exe']),
-      ([PYTHON, EMBUILDER, 'build', 'zlib'], ['building and verifying zlib', 'success'], True, ['zlib.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'libpng'], ['building and verifying libpng', 'success'], True, ['libpng.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'bullet'], ['building and verifying bullet', 'success'], True, ['bullet.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'vorbis'], ['building and verifying vorbis', 'success'], True, ['vorbis.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'ogg'], ['building and verifying ogg', 'success'], True, ['ogg.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'sdl2'], ['success'], True, ['sdl2.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'sdl2-gfx'], ['success'], True, ['sdl2-gfx.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'sdl2-image'], ['success'], True, ['sdl2-image.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'freetype'], ['building and verifying freetype', 'success'], True, ['freetype.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'harfbuzz'], ['building and verifying harfbuzz', 'success'], True, ['harfbuzz.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'icu'], ['building and verifying icu', 'success'], True, ['icu.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'sdl2-ttf'], ['building and verifying sdl2-ttf', 'success'], True, ['sdl2-ttf.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'sdl2-net'], ['building and verifying sdl2-net', 'success'], True, ['sdl2-net.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'binaryen'], ['building and verifying binaryen', 'success'], True, []),
-      ([PYTHON, EMBUILDER, 'build', 'cocos2d'], ['building and verifying cocos2d', 'success'], True, ['libCocos2d.bc']),
-      ([PYTHON, EMBUILDER, 'build', 'wasm-libc'], ['building and verifying wasm-libc', 'success'], True, ['wasm-libc.bc']),
-    ]
-    if Settings.WASM_BACKEND:
-      tests.append(([PYTHON, EMBUILDER, 'build', 'wasm_compiler_rt'], ['building and verifying wasm_compiler_rt', 'success'], True, ['wasm_compiler_rt.a']),)
-
-    Cache.erase()
-
-    for command, expected, success, result_libs in tests:
-      print(command)
-      for lib in result_libs:
-        if os.path.sep in lib:
-          dirname = os.path.dirname(Cache.get_path(lib))
-          print('    erase dir', dirname)
-          try_delete(dirname)
-        else:
-          print('    erase file', lib)
-          try_delete(Cache.get_path(lib))
-      proc = run_process(command, stdout=PIPE, stderr=STDOUT, check=False)
-      out = proc.stdout
-      if success and proc.returncode != 0:
-        print(out)
-      assert (proc.returncode == 0) == success
-      if not isinstance(expected, list):
-        expected = [expected]
-      for ex in expected:
-        print('    seek', ex)
-        assert ex in out, out
-      for lib in result_libs:
-        print('    verify', lib)
-        assert os.path.exists(Cache.get_path(lib))
-
   def test_d8_path(self):
     """ Test that running JS commands works for node, d8, and jsc and is not path dependent """
     # Fake some JS engines
@@ -896,9 +821,6 @@ fi
         self.check_working([EMCC] + MINIMAL_HELLO_WORLD + ['-c'], 'asmjs-unknown-emscripten')
 
     # fake llc output
-
-    try_delete(path_from_root('tests', 'fake'))
-    os.makedirs(path_from_root('tests', 'fake', 'bin'))
 
     def test_with_fake(report, expected):
       make_fake(report)
@@ -1019,13 +941,13 @@ BINARYEN_ROOT = ''
       prep()
       run_process([PYTHON, EMBUILDER, 'build', 'binaryen'])
       assert os.path.exists(tag_file)
-      run_process([PYTHON, EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'BINARYEN=1', '-s', 'BINARYEN_METHOD="interpret-binary"'])
+      run_process([PYTHON, EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'BINARYEN=1'])
       self.assertContained('hello, world!', run_js('a.out.js'))
 
       print('see we show an error for emmake (we cannot build natively under emmake)')
       prep()
       try_delete('a.out.js')
-      out = self.do([PYTHON, path_from_root('emmake.py'), EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'BINARYEN=1', '-s', 'BINARYEN_METHOD="interpret-binary"'])
+      out = self.do([PYTHON, path_from_root('emmake.py'), EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'BINARYEN=1'])
       assert not os.path.exists(tag_file)
       assert not os.path.exists('a.out.js')
       self.assertContained('For example, for binaryen, do "python embuilder.py build binaryen"', out)
@@ -1044,7 +966,7 @@ BINARYEN_ROOT = ''
           else:
             # EM_ASM doesn't work in a wasm side module, build a normal program
             cmd += [path_from_root('tests', 'hello_world.c'), '-s', 'SIDE_MODULE=1']
-          cmd += ['-s', 'BINARYEN=1', '-s', 'BINARYEN_METHOD="interpret-binary"']
+          cmd += ['-s', 'BINARYEN=1']
           run_process(cmd)
           assert os.path.exists(tag_file)
           assert os.path.exists('a.out.wasm')

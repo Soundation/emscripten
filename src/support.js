@@ -13,19 +13,11 @@ var STACK_ALIGN = {{{ STACK_ALIGN }}};
 stackSave = stackRestore = stackAlloc = function() {
   abort('cannot use the stack before compiled code is ready to run, and has provided stack access');
 };
-#endif
 
 function staticAlloc(size) {
-#if ASSERTIONS
-  assert(!staticSealed);
-#endif
-  var ret = STATICTOP;
-  STATICTOP = (STATICTOP + size + 15) & -16;
-#if ASSERTIONS
-  assert(STATICTOP < TOTAL_MEMORY, 'not enough memory for static allocation - increase TOTAL_MEMORY');
-#endif
-  return ret;
+  abort('staticAlloc is no longer available at runtime; instead, perform static allocations at compile time (using makeStaticAlloc)');
 }
+#endif
 
 function dynamicAlloc(size) {
 #if ASSERTIONS
@@ -33,13 +25,15 @@ function dynamicAlloc(size) {
 #endif
   var ret = HEAP32[DYNAMICTOP_PTR>>2];
   var end = (ret + size + 15) & -16;
-  HEAP32[DYNAMICTOP_PTR>>2] = end;
-  if (end >= TOTAL_MEMORY) {
-    var success = enlargeMemory();
-    if (!success) {
-      HEAP32[DYNAMICTOP_PTR>>2] = ret;
-      return 0;
-    }
+  if (end <= _emscripten_get_heap_size()) {
+    HEAP32[DYNAMICTOP_PTR>>2] = end;
+  } else {
+#if ALLOW_MEMORY_GROWTH
+    var success = _emscripten_resize_heap(end);
+    if (!success) return 0;
+#else
+    return 0;
+#endif
   }
   return ret;
 }
@@ -209,12 +203,27 @@ function loadDynamicLibrary(lib, flags) {
   // libModule <- libData
   function createLibModule(libData) {
 #if WASM
-    return loadWebAssemblyModule(libData, flags.loadAsync)
+    return loadWebAssemblyModule(libData, flags)
 #else
     var libModule = eval(libData)(
       alignFunctionTables(),
       Module
     );
+    // load dynamic libraries that this js lib depends on
+    // (wasm loads needed libraries _before_ lib in its own codepath)
+    if (libModule.dynamicLibraries) {
+      if (flags.loadAsync) {
+        return Promise.all(libModule.dynamicLibraries.map(function(dynNeeded) {
+          return loadDynamicLibrary(dynNeeded, flags);
+        })).then(function() {
+          return libModule;
+        });
+      }
+
+      libModule.dynamicLibraries.forEach(function(dynNeeded) {
+        loadDynamicLibrary(dynNeeded, flags);
+      });
+    }
     return libModule;
 #endif
   }
@@ -299,7 +308,7 @@ function loadDynamicLibrary(lib, flags) {
 
 #if WASM
 // Loads a side module from binary data
-function loadWebAssemblyModule(binary, loadAsync) {
+function loadWebAssemblyModule(binary, flags) {
   var int32View = new Uint32Array(new Uint8Array(binary.subarray(0, 24)).buffer);
   assert(int32View[0] == 0x6d736100, 'need to see wasm magic number'); // \0asm
   // we should see the dylink section right after the magic number and wasm version
@@ -328,159 +337,205 @@ function loadWebAssemblyModule(binary, loadAsync) {
   var memoryAlign = getLEB();
   var tableSize = getLEB();
   var tableAlign = getLEB();
-  // alignments are powers of 2
-  memoryAlign = Math.pow(2, memoryAlign);
-  tableAlign = Math.pow(2, tableAlign);
-  // finalize alignments and verify them
-  memoryAlign = Math.max(memoryAlign, STACK_ALIGN); // we at least need stack alignment
-  assert(tableAlign === 1);
-  // prepare memory
-  var memoryStart = alignMemory(getMemory(memorySize + memoryAlign), memoryAlign); // TODO: add to cleanups
-  // The static area consists of explicitly initialized data, followed by zero-initialized data.
-  // The latter may need zeroing out if the MAIN_MODULE has already used this memory area before
-  // dlopen'ing the SIDE_MODULE.  Since we don't know the size of the explicitly initialized data
-  // here, we just zero the whole thing, which is suboptimal, but should at least resolve bugs
-  // from uninitialized memory.
-  for (var i = memoryStart; i < memoryStart + memorySize; ++i) HEAP8[i] = 0;
-  // prepare env imports
-  var env = Module['asmLibraryArg'];
-  // TODO: use only __memory_base and __table_base, need to update asm.js backend
-  var table = Module['wasmTable'];
-  var oldTableSize = table.length;
-  env['__memory_base'] = env['gb'] = memoryStart;
-  env['__table_base'] = env['fb'] = oldTableSize;
-  var originalTable = table;
-  table.grow(tableSize);
-  assert(table === originalTable);
-  // zero-initialize memory and table
-  // TODO: in some cases we can tell it is already zero initialized
-  for (var i = env['__memory_base']; i < env['__memory_base'] + memorySize; i++) {
-    HEAP8[i] = 0;
+
+  // shared libraries this module needs. We need to load them first, so that
+  // current module could resolve its imports. (see tools/shared.py
+  // WebAssembly.make_shared_library() for "dylink" section extension format)
+  var neededDynlibsCount = getLEB();
+  var neededDynlibs = [];
+  for (var i = 0; i < neededDynlibsCount; ++i) {
+    var nameLen = getLEB();
+    var nameUTF8 = binary.subarray(next, next + nameLen);
+    next += nameLen;
+    var name = UTF8ArrayToString(nameUTF8, 0);
+    neededDynlibs.push(name);
   }
-  for (var i = env['__table_base']; i < env['__table_base'] + tableSize; i++) {
-    table.set(i, null);
-  }
-  // copy currently exported symbols so the new module can import them
-  for (var x in Module) {
-    if (!(x in env)) {
-      env[x] = Module[x];
+
+  // loadModule loads the wasm module after all its dependencies have been loaded.
+  // can be called both sync/async.
+  function loadModule() {
+    // alignments are powers of 2
+    memoryAlign = Math.pow(2, memoryAlign);
+    tableAlign = Math.pow(2, tableAlign);
+    // finalize alignments and verify them
+    memoryAlign = Math.max(memoryAlign, STACK_ALIGN); // we at least need stack alignment
+#if ASSERTIONS
+    assert(tableAlign === 1, 'invalid tableAlign ' + tableAlign);
+#endif
+    // prepare memory
+    var memoryBase = alignMemory(getMemory(memorySize + memoryAlign), memoryAlign); // TODO: add to cleanups
+    // The static area consists of explicitly initialized data, followed by zero-initialized data.
+    // The latter may need zeroing out if the MAIN_MODULE has already used this memory area before
+    // dlopen'ing the SIDE_MODULE.  Since we don't know the size of the explicitly initialized data
+    // here, we just zero the whole thing, which is suboptimal, but should at least resolve bugs
+    // from uninitialized memory.
+    for (var i = memoryBase; i < memoryBase + memorySize; ++i) HEAP8[i] = 0;
+    // prepare env imports
+    var env = asmLibraryArg;
+    // TODO: use only __memory_base and __table_base, need to update asm.js backend
+    var table = wasmTable;
+    var tableBase = table.length;
+    var originalTable = table;
+    table.grow(tableSize);
+    assert(table === originalTable);
+    // zero-initialize memory and table
+    // TODO: in some cases we can tell it is already zero initialized
+    for (var i = memoryBase; i < memoryBase + memorySize; i++) {
+      HEAP8[i] = 0;
     }
-  }
-  // wasm dynamic libraries are pure wasm, so they cannot assist in
-  // their own loading. When side module A wants to import something
-  // provided by a side module B that is loaded later, we need to
-  // add a layer of indirection, but worse, we can't even tell what
-  // to add the indirection for, without inspecting what A's imports
-  // are. To do that here, we use a JS proxy (another option would
-  // be to inspect the binary directly).
-  var proxyHandler = {
-    'get': function(obj, prop) {
-      if (prop in obj) {
-        return obj[prop]; // already present
+    for (var i = tableBase; i < tableBase + tableSize; i++) {
+      table.set(i, null);
+    }
+    // copy currently exported symbols so the new module can import them
+    for (var x in Module) {
+      if (!(x in env)) {
+        env[x] = Module[x];
       }
-      if (prop.startsWith('g$')) {
-        // a global. the g$ function returns the global address.
-        var name = prop.substr(2); // without g$ prefix
+    }
+    // TODO kill ↓↓↓ (except "symbols local to this module", it will likely be
+    // not needed if we require that if A wants symbols from B it has to link
+    // to B explicitly: similarly to -Wl,--no-undefined)
+    //
+    // wasm dynamic libraries are pure wasm, so they cannot assist in
+    // their own loading. When side module A wants to import something
+    // provided by a side module B that is loaded later, we need to
+    // add a layer of indirection, but worse, we can't even tell what
+    // to add the indirection for, without inspecting what A's imports
+    // are. To do that here, we use a JS proxy (another option would
+    // be to inspect the binary directly).
+    var proxyHandler = {
+      'get': function(obj, prop) {
+        // symbols that should be local to this module
+        switch (prop) {
+          case '__memory_base':
+          case 'gb':
+            return memoryBase;
+          case '__table_base':
+          case 'fb':
+            return tableBase;
+        }
+
+        if (prop in obj) {
+          return obj[prop]; // already present
+        }
+        if (prop.startsWith('g$')) {
+          // a global. the g$ function returns the global address.
+          var name = prop.substr(2); // without g$ prefix
+          return env[prop] = function() {
+#if ASSERTIONS
+            assert(Module[name], 'missing linked global ' + name + '. perhaps a side module was not linked in? if this global was expected to arrive from a system library, try to build the MAIN_MODULE with EMCC_FORCE_STDLIBS=1 in the environment');
+#endif
+            return Module[name];
+          };
+        }
+        if (prop.startsWith('invoke_')) {
+          // A missing invoke, i.e., an invoke for a function type
+          // present in the dynamic library but not in the main JS,
+          // and the dynamic library cannot provide JS for it. Use
+          // the generic "X" invoke for it.
+          return env[prop] = invoke_X;
+        }
+        // if not a global, then a function - call it indirectly
         return env[prop] = function() {
 #if ASSERTIONS
-          assert(Module[name], 'missing linked global ' + name);
+          assert(Module[prop], 'missing linked function ' + prop + '. perhaps a side module was not linked in? if this function was expected to arrive from a system library, try to build the MAIN_MODULE with EMCC_FORCE_STDLIBS=1 in the environment');
 #endif
-          return Module[name];
+          return Module[prop].apply(null, arguments);
         };
       }
-      if (prop.startsWith('invoke_')) {
-        // A missing invoke, i.e., an invoke for a function type
-        // present in the dynamic library but not in the main JS,
-        // and the dynamic library cannot provide JS for it. Use
-        // the generic "X" invoke for it.
-        return env[prop] = invoke_X;
-      }
-      // if not a global, then a function - call it indirectly
-      return env[prop] = function() {
+    };
+    var info = {
+      global: {
+        'NaN': NaN,
+        'Infinity': Infinity,
+      },
+      'global.Math': Math,
+      env: new Proxy(env, proxyHandler),
+      'asm2wasm': asm2wasmImports
+    };
 #if ASSERTIONS
-        assert(Module[prop], 'missing linked function ' + prop);
-#endif
-        return Module[prop].apply(null, arguments);
-      };
+    var oldTable = [];
+    for (var i = 0; i < tableBase; i++) {
+      oldTable.push(table.get(i));
     }
-  };
-  var info = {
-    global: {
-      'NaN': NaN,
-      'Infinity': Infinity,
-    },
-    'global.Math': Math,
-    env: new Proxy(env, proxyHandler),
-    'asm2wasm': asm2wasmImports
-  };
-#if ASSERTIONS
-  var oldTable = [];
-  for (var i = 0; i < oldTableSize; i++) {
-    oldTable.push(table.get(i));
-  }
 #endif
 
-  function postInstantiation(instance) {
-    var exports = {};
+    function postInstantiation(instance) {
+      var exports = {};
 #if ASSERTIONS
-    // the table should be unchanged
-    assert(table === originalTable);
-    assert(table === Module['wasmTable']);
-    if (instance.exports['table']) {
-      assert(table === instance.exports['table']);
-    }
-    // the old part of the table should be unchanged
-    for (var i = 0; i < oldTableSize; i++) {
-      assert(table.get(i) === oldTable[i], 'old table entries must remain the same');
-    }
-    // verify that the new table region was filled in
-    for (var i = 0; i < tableSize; i++) {
-      assert(table.get(oldTableSize + i) !== undefined, 'table entry was not filled in');
-    }
-#endif
-    for (var e in instance.exports) {
-      var value = instance.exports[e];
-      if (typeof value === 'object') {
-        // a breaking change in the wasm spec, globals are now objects
-        // https://github.com/WebAssembly/mutable-global/issues/1
-        value = value.value;
+      // the table should be unchanged
+      assert(table === originalTable);
+      assert(table === wasmTable);
+      if (instance.exports['table']) {
+        assert(table === instance.exports['table']);
       }
-      if (typeof value === 'number') {
-        // relocate it - modules export the absolute value, they can't relocate before they export
-#if EMULATE_FUNCTION_POINTER_CASTS
-        // it may be a function pointer
-        if (e.substr(0, 3) == 'fp$' && typeof instance.exports[e.substr(3)] === 'function') {
-          value = value + env['__table_base'];
-        } else {
+      // the old part of the table should be unchanged
+      for (var i = 0; i < tableBase; i++) {
+        assert(table.get(i) === oldTable[i], 'old table entries must remain the same');
+      }
+      // verify that the new table region was filled in
+      for (var i = 0; i < tableSize; i++) {
+        assert(table.get(tableBase + i) !== undefined, 'table entry was not filled in');
+      }
 #endif
-          value = value + env['__memory_base'];
-#if EMULATE_FUNCTION_POINTER_CASTS
+      for (var e in instance.exports) {
+        var value = instance.exports[e];
+        if (typeof value === 'object') {
+          // a breaking change in the wasm spec, globals are now objects
+          // https://github.com/WebAssembly/mutable-global/issues/1
+          value = value.value;
         }
+        if (typeof value === 'number') {
+          // relocate it - modules export the absolute value, they can't relocate before they export
+#if EMULATE_FUNCTION_POINTER_CASTS
+          // it may be a function pointer
+          if (e.substr(0, 3) == 'fp$' && typeof instance.exports[e.substr(3)] === 'function') {
+            value = value + tableBase;
+          } else {
 #endif
+            value = value + memoryBase;
+#if EMULATE_FUNCTION_POINTER_CASTS
+          }
+#endif
+        }
+        exports[e] = value;
       }
-      exports[e] = value;
-    }
-    // initialize the module
-    var init = exports['__post_instantiate'];
-    if (init) {
-      if (runtimeInitialized) {
-        init();
-      } else {
-        // we aren't ready to run compiled code yet
-        __ATINIT__.push(init);
+      // initialize the module
+      var init = exports['__post_instantiate'];
+      if (init) {
+        if (runtimeInitialized) {
+          init();
+        } else {
+          // we aren't ready to run compiled code yet
+          __ATINIT__.push(init);
+        }
       }
+      return exports;
     }
-    return exports;
+
+    if (flags.loadAsync) {
+      return WebAssembly.instantiate(binary, info).then(function(result) {
+        return postInstantiation(result.instance);
+      });
+    } else {
+      var instance = new WebAssembly.Instance(new WebAssembly.Module(binary), info);
+      return postInstantiation(instance);
+    }
   }
 
-  if (loadAsync) {
-    return WebAssembly.instantiate(binary, info).then(function(result) {
-      return postInstantiation(result.instance);
+  // now load needed libraries and the module itself.
+  if (flags.loadAsync) {
+    return Promise.all(neededDynlibs.map(function(dynNeeded) {
+      return loadDynamicLibrary(dynNeeded, flags);
+    })).then(function() {
+      return loadModule();
     });
-  } else {
-    var instance = new WebAssembly.Instance(new WebAssembly.Module(binary), info);
-    return postInstantiation(instance);
   }
+
+  neededDynlibs.forEach(function(dynNeeded) {
+    loadDynamicLibrary(dynNeeded, flags);
+  });
+  return loadModule();
 }
 Module['loadWebAssemblyModule'] = loadWebAssemblyModule;
 
@@ -544,34 +599,48 @@ Module['registerFunctions'] = registerFunctions;
 #endif // RELOCATABLE
 #endif // EMULATED_FUNCTION_POINTERS
 
-#if WASM_BACKEND_WITH_RESERVED_FUNCTION_POINTERS
+#if EMULATED_FUNCTION_POINTERS == 0
+#if WASM_BACKEND && RESERVED_FUNCTION_POINTERS
 var jsCallStartIndex = {{{ JSCALL_START_INDEX }}};
 var jsCallSigOrder = {{{ JSON.stringify(JSCALL_SIG_ORDER) }}};
 var jsCallNumSigs = Object.keys(jsCallSigOrder).length;
 var functionPointers = new Array(jsCallNumSigs * {{{ RESERVED_FUNCTION_POINTERS }}});
-#else // WASM_BACKEND_WITH_RESERVED_FUNCTION_POINTERS == 0
+#else // WASM_BACKEND && RESERVED_FUNCTION_POINTERS == 0
 var jsCallStartIndex = 1;
 var functionPointers = new Array({{{ RESERVED_FUNCTION_POINTERS }}});
-#endif // WASM_BACKEND_WITH_RESERVED_FUNCTION_POINTERS
+#endif // WASM_BACKEND && RESERVED_FUNCTION_POINTERS
+#endif // EMULATED_FUNCTION_POINTERS == 0
 
-// 'sig' parameter is only used on LLVM wasm backend
+#if WASM
+// Add a wasm function to the table.
+// Attempting to call this with JS function will cause of table.set() to fail
+function addWasmFunction(func) {
+  var table = wasmTable;
+  var ret = table.length;
+  table.grow(1);
+  table.set(ret, func);
+  return ret;
+}
+#endif
+
+// 'sig' parameter is currently only used for LLVM backend under certain
+// circumstance: RESERVED_FUNCTION_POINTERS=1, EMULATED_FUNCTION_POINTERS=0.
 function addFunction(func, sig) {
-#if WASM_BACKEND
+#if ASSERTIONS == 2
+  if (typeof sig === 'undefined') {
+    err('warning: addFunction(): You should provide a wasm function signature string as a second argument. This is not necessary for asm.js and asm2wasm, but can be required for the LLVM wasm backend, so it is recommended for full portability.');
+  }
+#endif // ASSERTIONS
+
+#if EMULATED_FUNCTION_POINTERS == 0
+#if WASM_BACKEND && RESERVED_FUNCTION_POINTERS
   assert(typeof sig !== 'undefined',
          'Second argument of addFunction should be a wasm function signature ' +
          'string');
-#endif // WASM_BACKEND
-#if ASSERTIONS
-  if (typeof sig === 'undefined') {
-    err('warning: addFunction(): You should provide a wasm function signature string as a second argument. This is not necessary for asm.js and asm2wasm, but is required for the LLVM wasm backend, so it is recommended for full portability.');
-  }
-#endif // ASSERTIONS
-#if EMULATED_FUNCTION_POINTERS == 0
-#if WASM_BACKEND_WITH_RESERVED_FUNCTION_POINTERS
   var base = jsCallSigOrder[sig] * {{{ RESERVED_FUNCTION_POINTERS }}};
-#else // WASM_BACKEND_WITH_RESERVED_FUNCTION_POINTERS == 0
+#else // WASM_BACKEND && RESERVED_FUNCTION_POINTERS == 0
   var base = 0;
-#endif // WASM_BACKEND_WITH_RESERVED_FUNCTION_POINTERS
+#endif // WASM_BACKEND && RESERVED_FUNCTION_POINTERS
   for (var i = base; i < base + {{{ RESERVED_FUNCTION_POINTERS }}}; i++) {
     if (!functionPointers[i]) {
       functionPointers[i] = func;
@@ -579,14 +648,15 @@ function addFunction(func, sig) {
     }
   }
   throw 'Finished up all reserved function pointers. Use a higher value for RESERVED_FUNCTION_POINTERS.';
-#else
+
+#else // EMULATED_FUNCTION_POINTERS == 0
+
 #if WASM
-  // we can simply append to the wasm table
-  var table = Module['wasmTable'];
-  var ret = table.length;
-  table.grow(1);
-  table.set(ret, func);
-  return ret;
+  // assume we have been passed a wasm function and can add it to the table
+  // directly.
+  // TODO(sbc): This assumtion is most likely not valid.  Look into ways of
+  // creating wasm functions based on JS functions as input.
+  return addWasmFunction(func);
 #else
   alignFunctionTables(); // XXX we should rely on this being an invariant
   var tables = getFunctionTables();
@@ -599,7 +669,8 @@ function addFunction(func, sig) {
   }
   return ret;
 #endif
-#endif
+
+#endif // EMULATED_FUNCTION_POINTERS == 0
 }
 
 function removeFunction(index) {
@@ -745,10 +816,6 @@ function getCompilerSetting(name) {
 #endif // RETAIN_COMPILER_SETTINGS
 
 var Runtime = {
-  // FIXME backwards compatibility layer for ports. Support some Runtime.*
-  //       for now, fix it there, then remove it from here. That way we
-  //       can minimize any period of breakage.
-  dynCall: dynCall, // for SDL2 port
 #if ASSERTIONS
   // helpful errors
   getTempRet0: function() { abort('getTempRet0() is now a top-level function, after removing the Runtime object. Remove "Runtime."') },
@@ -766,3 +833,18 @@ var GLOBAL_BASE = {{{ GLOBAL_BASE }}};
 #if RELOCATABLE
 GLOBAL_BASE = alignMemory(GLOBAL_BASE, {{{ MAX_GLOBAL_ALIGN || 1 }}});
 #endif
+
+#if WASM_BACKEND && USE_PTHREADS
+// The wasm backend path does not have a way to set the stack max, so we can
+// just implement this function in a trivial way
+function establishStackSpace(base, max) {
+  stackRestore(base);
+}
+
+// JS library code refers to Atomics in the manner used from asm.js, provide
+// the same API here.
+var Atomics_load = Atomics.load;
+var Atomics_store = Atomics.store;
+var Atomics_compareExchange = Atomics.compareExchange;
+#endif
+

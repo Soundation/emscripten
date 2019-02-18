@@ -42,47 +42,9 @@ function preprocess(text, filenameHint) {
         if (line[1] == 'i') {
           if (line[2] == 'f') { // if
             var parts = line.split(' ');
-            var ident = parts[1];
-            var op = parts[2];
-            var value = parts[3];
-            if (typeof value === 'string') {
-              // when writing
-              // #if option == 'stringValue'
-              // we need to get rid of the quotes
-              if (value[0] === '"' || value[0] === "'") {
-                assert(value[value.length - 1] == '"' || value[value.length - 1] == "'");
-                value = value.substring(1, value.length - 1);
-              }
-            }
-            if (op) {
-              if (op === '==') {
-                showStack.push(ident in this && this[ident] == value);
-              } else if (op === '!=') {
-                showStack.push(!(ident in this && this[ident] == value));
-              } else if (op === '<') {
-                showStack.push(ident in this && this[ident] < value);
-              } else if (op === '<=') {
-                showStack.push(ident in this && this[ident] <= value);
-              } else if (op === '>') {
-                showStack.push(ident in this && this[ident] > value);
-              } else if (op === '>=') {
-                showStack.push(ident in this && this[ident] >= value);
-              } else {
-                error('unsupported preprocessor op ' + op);
-              }
-            } else {
-              // Check if a value is truthy.
-              var short = ident[0] === '!' ? ident.substr(1) : ident;
-              var truthy = short in this;
-              if (truthy) {
-                truthy = !!this[short];
-              }
-              if (ident[0] === '!') {
-                showStack.push(!truthy);
-              } else {
-                showStack.push(truthy);
-              }
-            }
+            var after = parts.slice(1).join(' ');
+            var truthy = !!eval(after);
+            showStack.push(truthy);
           } else if (line[2] == 'n') { // include
             var filename = line.substr(line.indexOf(' ')+1);
             if (filename.indexOf('"') === 0) {
@@ -92,13 +54,13 @@ function preprocess(text, filenameHint) {
             ret += '\n' + preprocess(included, filename) + '\n'
           }
         } else if (line[2] == 'l') { // else
-          assert(showStack.length > 0);
+          assert(showStack.length > 0, 'preprocessing error parsing #else on line ' + i + ': ' + line);
           showStack.push(!showStack.pop());
         } else if (line[2] == 'n') { // endif
-          assert(showStack.length > 0);
+          assert(showStack.length > 0, 'preprocessing error parsing #endif on line ' + i + ': ' + line);
           showStack.pop();
         } else {
-          throw "Unclear preprocessor command: " + line;
+          throw "Unclear preprocessor command on line " + i + ': ' + line;
         }
       }
     } catch(e) {
@@ -106,7 +68,7 @@ function preprocess(text, filenameHint) {
       throw e;
     }
   }
-  assert(showStack.length == 0);
+  assert(showStack.length == 0, 'preprocessing error in file '+ filenameHint + ', no matching #endif found (' + showStack.length + ' unmatched preprocessing directives on stack)');
   return ret;
 }
 
@@ -1078,6 +1040,14 @@ function makeHEAPView(which, start, end) {
   return 'HEAP' + which + '.subarray((' + start + ')' + mod + ',(' + end + ')' + mod + ')';
 }
 
+function makeDynCall(sig) {
+  if (!MAIN_MODULE && !SIDE_MODULE) {
+    return 'dynCall_' + sig;
+  } else {
+    return "Module['dynCall_" + sig + "']";
+  }
+}
+
 var TWO_TWENTY = Math.pow(2, 20);
 
 // Given two values and an operation, returns the result of that operation.
@@ -1335,7 +1305,11 @@ function makeStructuralReturn(values, inAsm) {
 }
 
 function makeThrow(what) {
-  return 'throw ' + what + (DISABLE_EXCEPTION_CATCHING == 1 ? ' + " - Exception catching is disabled, this exception cannot be caught. Compile with -s DISABLE_EXCEPTION_CATCHING=0 or DISABLE_EXCEPTION_CATCHING=2 to catch."' : '') + ';';
+  if (ASSERTIONS) {
+    return 'throw ' + what + (DISABLE_EXCEPTION_CATCHING == 1 ? ' + " - Exception catching is disabled, this exception cannot be caught. Compile with -s DISABLE_EXCEPTION_CATCHING=0 or DISABLE_EXCEPTION_CATCHING=2 to catch."' : '') + ';';
+  } else {
+  return 'throw ' + what + ';';
+  }
 }
 
 function makeSignOp(value, type, op, force, ignore) {
@@ -1429,6 +1403,22 @@ function charCode(char) {
   return char.charCodeAt(0);
 }
 
+// Returns the number of bytes the given Javascript string takes if encoded as a UTF8 byte array, EXCLUDING the null terminator byte.
+function lengthBytesUTF8(str) {
+  var len = 0;
+  for (var i = 0; i < str.length; ++i) {
+    // Gotcha: charCodeAt returns a 16-bit word that is a UTF-16 encoded code unit, not a Unicode code point of the character! So decode UTF16->UTF32->UTF8.
+    // See http://unicode.org/faq/utf_bom.html#utf16-3
+    var u = str.charCodeAt(i); // possibly a lead surrogate
+    if (u >= 0xD800 && u <= 0xDFFF) u = 0x10000 + ((u & 0x3FF) << 10) | (str.charCodeAt(++i) & 0x3FF);
+    if (u <= 0x7F) ++len;
+    else if (u <= 0x7FF) len += 2;
+    else if (u <= 0xFFFF) len += 3;
+    else len += 4;
+  }
+  return len;
+}
+
 function getTypeFromHeap(suffix) {
   switch (suffix) {
     case '8': return 'i8';
@@ -1479,8 +1469,54 @@ function makeEval(code) {
 }
 
 function makeStaticAlloc(size) {
-  size = (size + (STACK_ALIGN-1)) & -STACK_ALIGN;
-  return 'STATICTOP; STATICTOP += ' + size + ';';
+  size = alignMemory(size);
+  var ret = alignMemory(GLOBAL_BASE + STATIC_BUMP);
+  STATIC_BUMP = ret + size - GLOBAL_BASE;
+  return ret;
+}
+
+function makeStaticString(string) {
+  var len = lengthBytesUTF8(string) + 1;
+  var ptr = makeStaticAlloc(len);
+  return '(stringToUTF8("' + string + '", ' + ptr + ', ' + len + '), ' + ptr + ')';
+}
+
+// Generates access to module exports variable in pthreads worker.js. Depending on whether main code is built with MODULARIZE
+// or not, asm module exports need to either be accessed via a local exports object obtained from instantiating the module (in src/worker.js), or via
+// the global Module exports object.
+function makeAsmExportAccessInPthread(variable) {
+  if (MODULARIZE) {
+    return "Module['" + variable + "']"; // 'Module' is defined in worker.js local scope, so not EXPORT_NAME in this case.
+  } else {
+    return EXPORT_NAME + "['" + variable + "']";
+  }
+}
+
+// Generates access to a JS global scope variable in pthreads worker.js. In MODULARIZE mode the JS scope is not directly accessible, so all the relevant variables
+// are exported via Module. In non-MODULARIZE mode, we can directly access the variables in global scope.
+function makeAsmGlobalAccessInPthread(variable) {
+  if (MODULARIZE) {
+    return "Module['" + variable + "']"; // 'Module' is defined in worker.js local scope, so not EXPORT_NAME in this case.
+  } else {
+    return variable;
+  }
+}
+
+// Generates access to both global scope variable and exported Module variable, e.g. "Module['foo'] = foo" or just plain "foo" depending on if we are MODULARIZEing.
+// Used the be able to initialize both variables at the same time in scenarios where a variable exists in both global scope and in Module.
+function makeAsmExportAndGlobalAssignTargetInPthread(variable) {
+  if (MODULARIZE) {
+    return "Module['" + variable + "'] = " + variable; // 'Module' is defined in worker.js local scope, so not EXPORT_NAME in this case.
+  } else {
+    return variable;
+  }
+}
+
+// Some things, like the dynamic and stack bases, will be computed later and
+// applied. Return them as {{{ STR }}} for that replacing later.
+
+function getQuoted(str) {
+  return '{{{ ' + str + ' }}}';
 }
 
 function makeRetainedCompilerSettings() {
@@ -1492,5 +1528,14 @@ function makeRetainedCompilerSettings() {
     } catch(e){}
   }
   return ret;
+}
+
+// In wasm, the heap size must be a multiple of 64KB.
+// In asm.js, it must be a multiple of 16MB.
+var WASM_PAGE_SIZE = 65536;
+var ASMJS_PAGE_SIZE = 16777216;
+
+function getPageSize() {
+  return WASM ? WASM_PAGE_SIZE : ASMJS_PAGE_SIZE;
 }
 

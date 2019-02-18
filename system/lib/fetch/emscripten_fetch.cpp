@@ -11,6 +11,9 @@
 #include <emscripten/threading.h>
 #include <emscripten/emscripten.h>
 #include <math.h>
+#include <bits/errno.h>
+
+extern "C" {
 
 // Uncomment the following and clear the cache with emcc --clear-cache to rebuild this file to enable internal debugging.
 // #define FETCH_DEBUG
@@ -66,14 +69,14 @@ emscripten_fetch_t *emscripten_fetch(emscripten_fetch_attr_t *fetch_attr, const 
 	if (!url) return 0;
 
 	const bool synchronous = (fetch_attr->attributes & EMSCRIPTEN_FETCH_SYNCHRONOUS) != 0;
-	const bool readFromIndexedDB = (fetch_attr->attributes & (EMSCRIPTEN_FETCH_APPEND | EMSCRIPTEN_FETCH_NO_DOWNLOAD)) != 0;
+	const bool readFromIndexedDB = (fetch_attr->attributes & (EMSCRIPTEN_FETCH_APPEND | EMSCRIPTEN_FETCH_NO_DOWNLOAD)) != 0 || ((fetch_attr->attributes & EMSCRIPTEN_FETCH_REPLACE) == 0);
 	const bool writeToIndexedDB = (fetch_attr->attributes & EMSCRIPTEN_FETCH_PERSIST_FILE) != 0 || !strncmp(fetch_attr->requestMethod, "EM_IDB_", strlen("EM_IDB_"));
 	const bool performXhr = (fetch_attr->attributes & EMSCRIPTEN_FETCH_NO_DOWNLOAD) == 0;
 	const bool isMainBrowserThread = emscripten_is_main_browser_thread() != 0;
 	if (isMainBrowserThread && synchronous && (performXhr || readFromIndexedDB || writeToIndexedDB))
 	{
 #ifdef FETCH_DEBUG
-		EM_ASM(err('emscripten_fetch("' + Pointer_stringify($0) + '") failed! Synchronous blocking XHRs and IndexedDB operations are not supported on the main browser thread. Try dropping the EMSCRIPTEN_FETCH_SYNCHRONOUS flag, or run with the linker flag --proxy-to-worker to decouple main C runtime thread from the main browser thread.'), 
+		EM_ASM(err('emscripten_fetch("' + UTF8ToString($0) + '") failed! Synchronous blocking XHRs and IndexedDB operations are not supported on the main browser thread. Try dropping the EMSCRIPTEN_FETCH_SYNCHRONOUS flag, or run with the linker flag --proxy-to-worker to decouple main C runtime thread from the main browser thread.'), 
 			url);
 #endif
 		return 0;
@@ -172,12 +175,13 @@ EMSCRIPTEN_RESULT emscripten_fetch_wait(emscripten_fetch_t *fetch, double timeou
 #ifdef FETCH_DEBUG
 	EM_ASM(console.log('fetch: emscripten_fetch_wait..'));
 #endif
-	// TODO: timeoutMsecs is currently ignored. Return EMSCRIPTEN_RESULT_TIMED_OUT on timeout.
+	if (timeoutMsecs <= 0) return EMSCRIPTEN_RESULT_TIMED_OUT;
 	while(proxyState == 1/*sent to proxy worker*/)
 	{
 		if (!emscripten_is_main_browser_thread())
 		{
-			emscripten_futex_wait(&fetch->__proxyState, proxyState, 100 /*TODO HACK:Sleep sometimes doesn't wake up?*/);//timeoutMsecs);
+			int ret = emscripten_futex_wait(&fetch->__proxyState, proxyState, timeoutMsecs);
+			if (ret == -ETIMEDOUT) return EMSCRIPTEN_RESULT_TIMED_OUT;
 			proxyState = emscripten_atomic_load_u32(&fetch->__proxyState);
 		}
 		else 
@@ -193,11 +197,15 @@ EMSCRIPTEN_RESULT emscripten_fetch_wait(emscripten_fetch_t *fetch, double timeou
 	if (proxyState == 2) return EMSCRIPTEN_RESULT_SUCCESS;
 	else return EMSCRIPTEN_RESULT_FAILED;
 #else
-
+	if (fetch->readyState >= 4/*XMLHttpRequest.readyState.DONE*/) return EMSCRIPTEN_RESULT_SUCCESS; // already finished.
+	if (timeoutMsecs == 0) return EMSCRIPTEN_RESULT_TIMED_OUT/*Main thread testing completion with sleep=0msecs*/;
+	else
+	{
 #ifdef FETCH_DEBUG
-	EM_ASM(console.error('fetch: emscripten_fetch_wait is not available when building without pthreads!'));
+		EM_ASM(console.error('fetch: emscripten_fetch_wait() cannot stop to wait when building without pthreads!'));
 #endif
-	return EMSCRIPTEN_RESULT_FAILED;
+		return EMSCRIPTEN_RESULT_FAILED/*Main thread cannot block to wait*/;
+	}
 #endif
 }
 
@@ -242,3 +250,5 @@ static void fetch_free(emscripten_fetch_t *fetch)
 	free((void*)fetch->__attributes.overriddenMimeType);
 	free(fetch);
 }
+
+} // extern "C"

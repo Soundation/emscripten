@@ -210,15 +210,17 @@ mergeInto(LibraryManager.library, {
 #endif
             // If node we use the ws library.
             var WebSocketConstructor;
-            if (ENVIRONMENT_IS_NODE) {
 #if ENVIRONMENT_MAY_BE_NODE
+            if (ENVIRONMENT_IS_NODE) {
               WebSocketConstructor = require('ws');
-#endif ENVIRONMENT_MAY_BE_NODE
-            } else if (ENVIRONMENT_IS_WEB) {
+            } else
+#endif // ENVIRONMENT_MAY_BE_NODE
 #if ENVIRONMENT_MAY_BE_WEB
+            if (ENVIRONMENT_IS_WEB) {
               WebSocketConstructor = window['WebSocket'];
+            } else
 #endif // ENVIRONMENT_MAY_BE_WEB
-            } else {
+            {
               WebSocketConstructor = WebSocket;
             }
             ws = new WebSocketConstructor(url, opts);
@@ -727,10 +729,10 @@ mergeInto(LibraryManager.library, {
         if (event === 'error') {
           var sp = stackSave();
           var msg = allocate(intArrayFromString(data[2]), 'i8', ALLOC_STACK);
-          Module['dynCall_viiii'](callback, data[0], data[1], msg, userData);
+          {{{ makeDynCall('viiii') }}}(callback, data[0], data[1], msg, userData);
           stackRestore(sp);
         } else {
-          Module['dynCall_vii'](callback, data, userData);
+          {{{ makeDynCall('vii') }}}(callback, data, userData);
         }
       } catch (e) {
         if (e instanceof ExitStatus) {

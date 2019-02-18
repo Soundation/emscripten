@@ -4,9 +4,9 @@
 # University of Illinois/NCSA Open Source License.  Both these licenses can be
 # found in the LICENSE file.
 
-'''
-Tool to manage building of various useful things, such as libc, libc++, native optimizer, as well as fetch and build ports like zlib and sdl2
-'''
+"""Tool to manage building of various useful things, such as libc, libc++,
+native optimizer, as well as fetch and build ports like zlib and sdl2
+"""
 
 from __future__ import print_function
 import logging
@@ -14,68 +14,6 @@ import os
 import sys
 
 from tools import shared
-
-if len(sys.argv) < 2 or sys.argv[1] in ['-v', '-help', '--help', '-?', '?']:
-  print('''
-Emscripten System Builder Tool
-==============================
-
-You can use this tool to manually build parts of the emscripten system
-environment. In general emcc will build them automatically on demand, so
-you do not strictly need to use this tool, but it gives you more control
-over the process (in particular, if emcc does this automatically, and you
-are running multiple build commands in parallel, confusion can occur).
-
-Usage:
-
-  embuilder.py OPERATION TASK1 [TASK2..]
-
-Available operations and tasks:
-
-  build libc
-        libc-mt
-        libc-extras
-        struct_info
-        emmalloc
-        emmalloc_debug
-        dlmalloc
-        dlmalloc_debug
-        dlmalloc_threadsafe
-        dlmalloc_threadsafe_debug
-        pthreads
-        libcxx
-        libcxx_noexcept
-        libcxxabi
-        gl
-        native_optimizer
-        binaryen
-        bullet
-        freetype
-        libpng
-        ogg
-        sdl2
-        sdl2-image
-        sdl2-ttf
-        sdl2-net
-        vorbis
-        zlib
-        cocos2d
-        wasm-libc
-        wasm_compiler_rt
-
-Issuing 'embuilder.py build ALL' causes each task to be built.
-
-It is also possible to build native_optimizer manually by using CMake. To
-do that, run
-
-   1. cd $EMSCRIPTEN/tools/optimizer
-   2. cmake . -DCMAKE_BUILD_TYPE=Release
-   3. make (or mingw32-make/vcbuild/msbuild on Windows)
-
-and set up the location to the native optimizer in ~/.emscripten
-
-''')
-  sys.exit(0)
 
 C_BARE = '''
         int main() {}
@@ -101,11 +39,93 @@ CXX_WITH_STDLIB = '''
         }
       '''
 
-SYSTEM_TASKS = ['compiler-rt', 'libc', 'libc-mt', 'libc-extras', 'emmalloc', 'emmalloc_debug', 'dlmalloc', 'dlmalloc_threadsafe', 'pthreads', 'dlmalloc_debug', 'dlmalloc_threadsafe_debug', 'libcxx', 'libcxx_noexcept', 'libcxxabi', 'html5']
-USER_TASKS = ['al', 'gl', 'binaryen', 'bullet', 'freetype', 'icu', 'libpng', 'ogg', 'sdl2', 'sdl2-gfx', 'sdl2-image', 'sdl2-ttf', 'sdl2-net', 'vorbis', 'zlib']
+SYSTEM_TASKS = [
+    'al',
+    'compiler-rt',
+    'dlmalloc',
+    'dlmalloc_debug',
+    'dlmalloc_debug_noerrno',
+    'dlmalloc_noerrno',
+    'dlmalloc_threadsafe',
+    'dlmalloc_threadsafe_debug',
+    'dlmalloc_threadsafe_debug_noerrno',
+    'dlmalloc_threadsafe_noerrno',
+    'emmalloc',
+    'emmalloc_debug',
+    'gl',
+    'gl-emu',
+    'gl-emu-webgl2',
+    'gl-mt',
+    'gl-mt-emu',
+    'gl-mt-emu-webgl2',
+    'gl-mt-webgl2',
+    'gl-webgl2',
+    'html5',
+    'libc',
+    'libc++',
+    'libc++_noexcept',
+    'libc++abi',
+    'libc-extras',
+    'libc-mt',
+    'pthreads',
+    'pthreads_stub',
+]
+
+USER_TASKS = [
+    'binaryen',
+    'bullet',
+    'freetype',
+    'icu',
+    'libpng',
+    'ogg',
+    'regal',
+    'sdl2',
+    'sdl2-gfx',
+    'sdl2-image',
+    'sdl2-mixer',
+    'sdl2-net',
+    'sdl2-ttf',
+    'vorbis',
+    'zlib',
+]
 
 temp_files = shared.configuration.get_temp_files()
-logger = logging.getLogger(__file__)
+logger = logging.getLogger('embuilder')
+
+
+def print_help():
+  all_tasks = SYSTEM_TASKS + USER_TASKS
+  all_tasks.sort()
+  print('''
+Emscripten System Builder Tool
+==============================
+
+You can use this tool to manually build parts of the emscripten system
+environment. In general emcc will build them automatically on demand, so
+you do not strictly need to use this tool, but it gives you more control
+over the process (in particular, if emcc does this automatically, and you
+are running multiple build commands in parallel, confusion can occur).
+
+Usage:
+
+  embuilder.py OPERATION TASK1 [TASK2..]
+
+Available operations and tasks:
+
+  build %s
+
+Issuing 'embuilder.py build ALL' causes each task to be built.
+
+It is also possible to build native_optimizer manually by using CMake. To
+do that, run
+
+   1. cd $EMSCRIPTEN/tools/optimizer
+   2. cmake . -DCMAKE_BUILD_TYPE=Release
+   3. make (or mingw32-make/vcbuild/msbuild on Windows)
+
+and set up the location to the native optimizer in ~/.emscripten
+''' % '\n        '.join(all_tasks))
+
 
 def build(src, result_libs, args=[]):
   # build in order to generate the libraries
@@ -117,21 +137,33 @@ def build(src, result_libs, args=[]):
   shared.Building.emcc(cpp, args, output_filename=temp_js)
 
   # verify
-  assert os.path.exists(temp_js), 'failed to build file'
-  if result_libs:
-    for lib in result_libs:
-      assert os.path.exists(shared.Cache.get_path(lib)), 'not seeing that requested library %s has been built because file %s does not exist' % (lib, shared.Cache.get_path(lib))
+  if not os.path.exists(temp_js):
+    shared.exit_with_error('failed to build file')
+
+  for lib in result_libs:
+    if not os.path.exists(shared.Cache.get_path(lib)):
+      shared.exit_with_error('not seeing that requested library %s has been built because file %s does not exist' % (lib, shared.Cache.get_path(lib)))
 
 
 def build_port(port_name, lib_name, params):
-  build(C_BARE, [os.path.join('ports-builds', port_name, lib_name)] if lib_name else None, params)
+  build(C_BARE, [os.path.join('ports-builds', port_name, lib_name)] if lib_name else [], params)
+
+
+def static_library_name(name):
+  if shared.Settings.WASM_BACKEND:
+    return name + '.a'
+  else:
+    return name + '.bc'
 
 
 def main():
+  if len(sys.argv) < 2 or sys.argv[1] in ['-v', '-help', '--help', '-?', '?']:
+    print_help()
+    return 0
+
   operation = sys.argv[1]
   if operation != 'build':
-    logger.error('unfamiliar operation: ' + operation)
-    return 1
+    shared.exit_with_error('unfamiliar operation: ' + operation)
 
   auto_tasks = False
   tasks = sys.argv[2:]
@@ -143,7 +175,7 @@ def main():
     auto_tasks = True
   if auto_tasks:
     if shared.Settings.WASM_BACKEND:
-      skip_tasks = {'libc-mt', 'dlmalloc_threadsafe', 'dlmalloc_threadsafe_debug', 'pthreads'}
+      skip_tasks = {'libc-mt', 'gl-mt', 'dlmalloc_threadsafe', 'dlmalloc_threadsafe_debug', 'pthreads'}
       print('Skipping building of %s, because WebAssembly does not support pthreads.' % ', '.join(skip_tasks))
       tasks = [x for x in tasks if x not in skip_tasks]
     else:
@@ -163,37 +195,45 @@ def main():
           c = a / b;
           return 0;
         }
-      ''', ['compiler-rt.a'])
+      ''', ['libcompiler_rt.a'])
     elif what == 'libc':
-      build(C_WITH_MALLOC, ['libc.bc'])
+      build(C_WITH_MALLOC, [static_library_name('libc')])
     elif what == 'libc-extras':
       build('''
         extern char **environ;
         int main() {
           return (int)environ;
         }
-      ''', ['libc-extras.bc'])
+      ''', [static_library_name('libc-extras')])
     elif what == 'struct_info':
       build(C_BARE, ['generated_struct_info.json'])
     elif what == 'emmalloc':
-      build(C_WITH_MALLOC, ['emmalloc.bc'], ['-s', 'MALLOC="emmalloc"'])
+      build(C_WITH_MALLOC, [static_library_name('libemmalloc')], ['-s', 'MALLOC="emmalloc"'])
     elif what == 'emmalloc_debug':
-      build(C_WITH_MALLOC, ['emmalloc_debug.bc'], ['-s', 'MALLOC="emmalloc"', '-g'])
+      build(C_WITH_MALLOC, [static_library_name('libemmalloc_debug')], ['-s', 'MALLOC="emmalloc"', '-g'])
     elif what == 'dlmalloc':
-      build(C_WITH_MALLOC, ['dlmalloc.bc'], ['-s', 'MALLOC="dlmalloc"'])
+      build(C_WITH_MALLOC, [static_library_name('libdlmalloc')], ['-s', 'MALLOC="dlmalloc"'])
     elif what == 'dlmalloc_debug':
-      build(C_WITH_MALLOC, ['dlmalloc_debug.bc'], ['-g', '-s', 'MALLOC="dlmalloc"'])
+      build(C_WITH_MALLOC, [static_library_name('libdlmalloc_debug')], ['-g', '-s', 'MALLOC="dlmalloc"'])
     elif what == 'dlmalloc_threadsafe_debug':
-      build(C_WITH_MALLOC, ['dlmalloc_threadsafe_debug.bc'], ['-g', '-s', 'USE_PTHREADS=1', '-s', 'MALLOC="dlmalloc"'])
+      build(C_WITH_MALLOC, [static_library_name('libdlmalloc_threadsafe_debug')], ['-g', '-s', 'USE_PTHREADS=1', '-s', 'MALLOC="dlmalloc"'])
     elif what in ('dlmalloc_threadsafe', 'libc-mt', 'pthreads'):
-      build(C_WITH_MALLOC, ['libc-mt.bc', 'dlmalloc_threadsafe.bc', 'pthreads.bc'], ['-s', 'USE_PTHREADS=1', '-s', 'MALLOC="dlmalloc"'])
-    elif what == 'wasm-libc':
-      build(C_WITH_STDLIB, ['wasm-libc.bc'], ['-s', 'WASM=1'])
-    elif what == 'libcxx':
-      build(CXX_WITH_STDLIB, ['libcxx.a'], ['-s', 'DISABLE_EXCEPTION_CATCHING=0'])
-    elif what == 'libcxx_noexcept':
-      build(CXX_WITH_STDLIB, ['libcxx_noexcept.a'])
-    elif what == 'libcxxabi':
+      build(C_WITH_MALLOC, [static_library_name('libc-mt'), static_library_name('libdlmalloc_threadsafe'), static_library_name('libpthreads')], ['-s', 'USE_PTHREADS=1', '-s', 'MALLOC="dlmalloc"'])
+    elif what == 'dlmalloc_noerrno':
+      build(C_WITH_MALLOC, [static_library_name('libdlmalloc_noerrno')], ['-s', 'MALLOC="dlmalloc"', '-s', 'SUPPORT_ERRNO=0'])
+    elif what == 'dlmalloc_debug_noerrno':
+      build(C_WITH_MALLOC, [static_library_name('libdlmalloc_debug_noerrno')], ['-g', '-s', 'MALLOC="dlmalloc"', '-s', 'SUPPORT_ERRNO=0'])
+    elif what == 'dlmalloc_threadsafe_debug_noerrno':
+      build(C_WITH_MALLOC, [static_library_name('libdlmalloc_threadsafe_debug_noerrno')], ['-g', '-s', 'USE_PTHREADS=1', '-s', 'MALLOC="dlmalloc"', '-s', 'SUPPORT_ERRNO=0'])
+    elif what == 'dlmalloc_threadsafe_noerrno':
+      build(C_WITH_MALLOC, [static_library_name('libdlmalloc_threadsafe_noerrno')], ['-s', 'USE_PTHREADS=1', '-s', 'MALLOC="dlmalloc"', '-s', 'SUPPORT_ERRNO=0'])
+    elif what == 'libc-wasm':
+      build(C_WITH_STDLIB, [static_library_name('libc-wasm')], ['-s', 'WASM=1'])
+    elif what == 'libc++':
+      build(CXX_WITH_STDLIB, ['libc++.a'], ['-s', 'DISABLE_EXCEPTION_CATCHING=0'])
+    elif what == 'libc++_noexcept':
+      build(CXX_WITH_STDLIB, ['libc++_noexcept.a'])
+    elif what == 'libc++abi':
       build('''
         struct X { int x; virtual void a() {} };
         struct Y : X { int y; virtual void a() { y = 10; }};
@@ -202,21 +242,28 @@ def main():
           y->a();
           return y->y;
         }
-      ''', ['libcxxabi.bc'])
-    elif what == 'gl':
+      ''', [static_library_name('libc++abi')])
+    elif what == 'gl' or what.startswith('gl-'):
+      opts = []
+      if '-mt' in what:
+        opts += ['-s', 'USE_PTHREADS=1']
+      if '-emu' in what:
+        opts += ['-s', 'LEGACY_GL_EMULATION=1']
+      if '-webgl2' in what:
+        opts += ['-s', 'USE_WEBGL2=1']
       build('''
         extern "C" { extern void* emscripten_GetProcAddress(const char *x); }
         int main() {
           return int(emscripten_GetProcAddress("waka waka"));
         }
-      ''', ['gl.bc'])
+      ''', [static_library_name('lib%s' % what)], opts)
     elif what == 'native_optimizer':
       build(C_BARE, ['optimizer.2.exe'], ['-O2', '-s', 'WASM=0'])
-    elif what == 'wasm_compiler_rt':
+    elif what == 'compiler_rt_wasm':
       if shared.Settings.WASM_BACKEND:
-        build(C_BARE, ['wasm_compiler_rt.a'], ['-s', 'WASM=1'])
+        build(C_BARE, ['libcompiler_rt_wasm.a'], ['-s', 'WASM=1'])
       else:
-        logger.warning('wasm_compiler_rt not built when using JSBackend')
+        logger.warning('compiler_rt_wasm not built when using JSBackend')
     elif what == 'html5':
       build('''
         #include <stdlib.h>
@@ -225,7 +272,15 @@ def main():
           return emscripten_compute_dom_pk_code(NULL);
         }
 
-      ''', ['html5.bc'])
+      ''', [static_library_name('libhtml5')])
+    elif what == 'pthreads_stub':
+      build('''
+        #include <emscripten/threading.h>
+        int main() {
+          return emscripten_is_main_runtime_thread();
+        }
+
+      ''', [static_library_name('libpthreads_stub')])
     elif what == 'al':
       build('''
         #include "AL/al.h"
@@ -233,7 +288,7 @@ def main():
           alGetProcAddress(0);
           return 0;
         }
-      ''', ['al.bc'])
+      ''', [static_library_name('libal')])
     elif what == 'icu':
       build_port('icu', 'libicuuc.bc', ['-s', 'USE_ICU=1'])
     elif what == 'zlib':
@@ -254,6 +309,8 @@ def main():
       build_port('sdl2-image', 'libsdl2_image.bc', ['-s', 'USE_SDL=2', '-s', 'USE_SDL_IMAGE=2'])
     elif what == 'sdl2-net':
       build_port('sdl2-net', 'libsdl2_net.bc', ['-s', 'USE_SDL=2', '-s', 'USE_SDL_NET=2'])
+    elif what == 'sdl2-mixer':
+      build_port('sdl2-mixer', 'libsdl2_mixer.a', ['-s', 'USE_SDL=2', '-s', 'USE_SDL_MIXER=2', '-s', 'USE_VORBIS=1'])
     elif what == 'freetype':
       build_port('freetype', 'libfreetype.a', ['-s', 'USE_FREETYPE=1'])
     elif what == 'harfbuzz':
@@ -264,9 +321,11 @@ def main():
       build_port('binaryen', None, ['-s', 'WASM=1'])
     elif what == 'cocos2d':
       build_port('cocos2d', None, ['-s', 'USE_COCOS2D=3', '-s', 'USE_ZLIB=1', '-s', 'USE_LIBPNG=1', '-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0'])
+    elif what == 'regal':
+      build_port('regal', 'libregal.bc', ['-s', 'USE_REGAL=1'])
     else:
       logger.error('unfamiliar build target: ' + what)
-      sys.exit(1)
+      return 1
 
     logger.info('...success')
   return 0

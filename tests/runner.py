@@ -24,7 +24,6 @@ import atexit
 import contextlib
 import difflib
 import fnmatch
-import functools
 import glob
 import hashlib
 import json
@@ -46,13 +45,11 @@ import urllib
 import webbrowser
 
 if sys.version_info.major == 2:
-  from BaseHTTPServer import HTTPServer, BaseHTTPRequestHandler
+  from BaseHTTPServer import HTTPServer
   from SimpleHTTPServer import SimpleHTTPRequestHandler
-  from httplib import HTTPConnection
   from urllib import unquote
 else:
-  from http.server import HTTPServer, BaseHTTPRequestHandler, SimpleHTTPRequestHandler
-  from http.client import HTTPConnection
+  from http.server import HTTPServer, SimpleHTTPRequestHandler
   from urllib.parse import unquote
 
 # Setup
@@ -91,6 +88,10 @@ EMTEST_SAVE_DIR = os.getenv('EMTEST_SAVE_DIR', os.getenv('EM_SAVE_DIR'))
 # to force testing on all js engines, good to find js engine bugs
 EMTEST_ALL_ENGINES = os.getenv('EMTEST_ALL_ENGINES')
 
+EMTEST_SKIP_SLOW = os.getenv('EMTEST_SKIP_SLOW')
+
+EMTEST_VERBOSE = os.getenv('EMTEST_VERBOSE')
+
 
 # checks if browser testing is enabled
 def has_browser():
@@ -114,6 +115,15 @@ def needs_dlfcn(func):
   def decorated(self):
     self.check_dlfcn()
     return func(self)
+
+  return decorated
+
+
+def is_slow_test(func):
+  def decorated(self, *args, **kwargs):
+    if EMTEST_SKIP_SLOW:
+      return self.skipTest('skipping slow tests')
+    return func(self, *args, **kwargs)
 
   return decorated
 
@@ -194,7 +204,14 @@ def chdir(dir):
 def limit_size(string, MAX=800 * 20):
   if len(string) < MAX:
     return string
-  return string[0:MAX / 2] + '\n[..]\n' + string[-MAX / 2:]
+  return string[0:MAX // 2] + '\n[..]\n' + string[-MAX // 2:]
+
+
+def create_test_file(name, contents, binary=False):
+  assert not os.path.isabs(name)
+  mode = 'wb' if binary else 'w'
+  with open(name, mode) as f:
+    f.write(contents)
 
 
 # The core test modes
@@ -205,18 +222,18 @@ core_test_modes = [
   'asm3',
   'asm2g',
   'asm2f',
-  'binaryen0',
-  'binaryen1',
-  'binaryen2',
-  'binaryen3',
-  'binaryens',
-  'binaryenz',
+  'wasm0',
+  'wasm1',
+  'wasm2',
+  'wasm3',
+  'wasms',
+  'wasmz',
   'asmi',
   'asm2i',
 ]
 
 # The default core test mode, used when none is specified
-default_core_test_mode = 'binaryen0'
+default_core_test_mode = 'wasm0'
 
 # The non-core test modes
 non_core_test_modes = [
@@ -353,13 +370,21 @@ class RunnerCore(unittest.TestCase):
       return self.settings_mods[key]
     return Settings[key]
 
-  def set_setting(self, key, value):
+  def set_setting(self, key, value=1):
+    if value is None:
+      self.clear_setting(key)
     self.settings_mods[key] = value
+
+  def clear_setting(self, key):
+    self.settings_mods.pop(key, None)
 
   def serialize_settings(self):
     ret = []
     for key, value in self.settings_mods.items():
-      ret += ['-s', '{}={}'.format(key, json.dumps(value))]
+      if value == 1:
+        ret += ['-s', key]
+      else:
+        ret += ['-s', '{}={}'.format(key, json.dumps(value))]
     return ret
 
   def get_dir(self):
@@ -376,7 +401,7 @@ class RunnerCore(unittest.TestCase):
     if not args:
       return
     js = open(filename).read()
-    open(filename, 'w').write(js.replace('run();', 'run(%s + Module["arguments"]);' % str(args)))
+    create_test_file(filename, js.replace('run();', 'run(%s + Module["arguments"]);' % str(args)))
 
   def prep_ll_run(self, filename, ll_file, force_recompile=False, build_ll_hook=None):
     # force_recompile = force_recompile or os.path.getsize(filename + '.o.ll') > 50000
@@ -447,9 +472,8 @@ class RunnerCore(unittest.TestCase):
 
     # Copy over necessary files for compiling the source
     if main_file is None:
-      f = open(filename, 'w')
-      f.write(src)
-      f.close()
+      with open(filename, 'w') as f:
+        f.write(src)
       final_additional_files = []
       for f in additional_files:
         final_additional_files.append(os.path.join(dirname, os.path.basename(f)))
@@ -491,7 +515,7 @@ class RunnerCore(unittest.TestCase):
       if len(additional_files) + len(libraries):
         shutil.move(object_file, object_file + '.alone')
         inputs = [object_file + '.alone'] + [f + '.o' for f in additional_files] + libraries
-        Building.link(inputs, object_file)
+        Building.link_to_object(inputs, object_file)
         if not os.path.exists(object_file):
           print("Failed to link LLVM binaries:\n\n", object_file)
           self.fail("Linkage error")
@@ -525,7 +549,7 @@ class RunnerCore(unittest.TestCase):
       assert ('/* memory initializer */' not in src) or ('/* memory initializer */ allocate([]' in src)
 
   def validate_asmjs(self, err):
-    m = re.search("asm.js type error: '(\w+)' is not a (standard|supported) SIMD type", err)
+    m = re.search(r"asm.js type error: '(\w+)' is not a (standard|supported) SIMD type", err)
     if m:
       # Bug numbers for missing SIMD types:
       bugs = {
@@ -599,17 +623,18 @@ class RunnerCore(unittest.TestCase):
     return ('(export "%s"' % name) in wat
 
   def run_generated_code(self, engine, filename, args=[], check_timeout=True, output_nicerizer=None, assert_returncode=0):
-    stdout = os.path.join(self.get_dir(), 'stdout') # use files, as PIPE can get too full and hang us
-    stderr = os.path.join(self.get_dir(), 'stderr')
-    try:
-      cwd = os.getcwd()
-    except:
-      cwd = None
-    os.chdir(self.get_dir())
-    self.assertEqual(line_endings.check_line_endings(filename), 0) # Make sure that we produced proper line endings to the .js file we are about to run.
-    jsrun.run_js(filename, engine, args, check_timeout, stdout=open(stdout, 'w'), stderr=open(stderr, 'w'), assert_returncode=assert_returncode)
-    if cwd is not None:
-      os.chdir(cwd)
+    # use files, as PIPE can get too full and hang us
+    stdout = self.in_dir('stdout')
+    stderr = self.in_dir('stderr')
+    # Make sure that we produced proper line endings to the .js file we are about to run.
+    self.assertEqual(line_endings.check_line_endings(filename), 0)
+    if EMTEST_VERBOSE:
+      print("Running '%s' under '%s'" % (filename, engine))
+    with chdir(self.get_dir()):
+      jsrun.run_js(filename, engine, args, check_timeout,
+                   stdout=open(stdout, 'w'),
+                   stderr=open(stderr, 'w'),
+                   assert_returncode=assert_returncode)
     out = open(stdout, 'r').read()
     err = open(stderr, 'r').read()
     if engine == SPIDERMONKEY_ENGINE and self.get_setting('ASM_JS') == 1:
@@ -619,6 +644,10 @@ class RunnerCore(unittest.TestCase):
     else:
       ret = out + err
     assert 'strict warning:' not in ret, 'We should pass all strict mode checks: ' + ret
+    if EMTEST_VERBOSE:
+      print('-- being program output --')
+      print(ret, end='')
+      print('-- end program output --')
     return ret
 
   # Tests that the given two paths are identical, modulo path delimiters. E.g. "C:/foo" is equal to "C:\foo".
@@ -690,7 +719,8 @@ class RunnerCore(unittest.TestCase):
     build_dir = self.get_build_dir()
     output_dir = self.get_dir()
 
-    cache_name = name + ','.join([opt for opt in Building.COMPILER_TEST_OPTS if len(opt) < 7]) + '_' + hashlib.md5(str(Building.COMPILER_TEST_OPTS).encode('utf-8')).hexdigest() + cache_name_extra
+    hash_input = (str(Building.COMPILER_TEST_OPTS) + ' $ ' + str(env_init)).encode('utf-8')
+    cache_name = name + ','.join([opt for opt in Building.COMPILER_TEST_OPTS if len(opt) < 7]) + '_' + hashlib.md5(hash_input).hexdigest() + cache_name_extra
 
     valid_chars = "_%s%s" % (string.ascii_letters, string.digits)
     cache_name = ''.join([(c if c in valid_chars else '_') for c in cache_name])
@@ -701,9 +731,8 @@ class RunnerCore(unittest.TestCase):
         generated_libs = []
         for basename, contents in self.library_cache[cache_name]:
           bc_file = os.path.join(build_dir, cache_name + '_' + basename)
-          f = open(bc_file, 'wb')
-          f.write(contents)
-          f.close()
+          with open(bc_file, 'wb') as f:
+            f.write(contents)
           generated_libs.append(bc_file)
         return generated_libs
 
@@ -722,14 +751,12 @@ class RunnerCore(unittest.TestCase):
   # Shared test code between main suite and others
 
   def setup_runtimelink_test(self):
-    header = r'''
+    create_test_file('header.h', r'''
       struct point
       {
         int x, y;
       };
-
-    '''
-    open(os.path.join(self.get_dir(), 'header.h'), 'w').write(header)
+    ''')
 
     supp = r'''
       #include <stdio.h>
@@ -746,8 +773,7 @@ class RunnerCore(unittest.TestCase):
 
       int suppInt = 76;
     '''
-    supp_name = os.path.join(self.get_dir(), 'supp.cpp')
-    open(supp_name, 'w').write(supp)
+    create_test_file('supp.cpp', supp)
 
     main = r'''
       #include <stdio.h>
@@ -773,6 +799,123 @@ class RunnerCore(unittest.TestCase):
       }
     '''
     return (main, supp)
+
+  # excercise dynamic linker.
+  #
+  # test that linking to shared library B, which is linked to A, loads A as well.
+  # main is also linked to C, which is also linked to A. A is loaded/initialized only once.
+  #
+  #          B
+  #   main <   > A
+  #          C
+  #
+  # this test is used by both test_core and test_browser.
+  # when run under broswer it excercises how dynamic linker handles concurrency
+  # - because B and C are loaded in parallel.
+  def _test_dylink_dso_needed(self, do_run):
+    create_test_file('liba.cpp', r'''
+        #include <stdio.h>
+        #include <emscripten.h>
+
+        static const char *afunc_prev;
+
+        EMSCRIPTEN_KEEPALIVE void afunc(const char *s);
+        void afunc(const char *s) {
+          printf("a: %s (prev: %s)\n", s, afunc_prev);
+          afunc_prev = s;
+        }
+
+        struct ainit {
+          ainit() {
+            puts("a: loaded");
+          }
+        };
+
+        static ainit _;
+      ''')
+
+    create_test_file('libb.cpp', r'''
+        #include <emscripten.h>
+
+        void afunc(const char *s);
+        EMSCRIPTEN_KEEPALIVE void bfunc();
+        void bfunc() {
+          afunc("b");
+        }
+      ''')
+
+    create_test_file('libc.cpp', r'''
+        #include <emscripten.h>
+
+        void afunc(const char *s);
+        EMSCRIPTEN_KEEPALIVE void cfunc();
+        void cfunc() {
+          afunc("c");
+        }
+      ''')
+
+    # _test_dylink_dso_needed can be potentially called several times by a test.
+    # reset dylink-related options first.
+    self.clear_setting('MAIN_MODULE')
+    self.clear_setting('SIDE_MODULE')
+    self.clear_setting('RUNTIME_LINKED_LIBS')
+
+    # XXX in wasm each lib load currently takes 5MB; default TOTAL_MEMORY=16MB is thus not enough
+    self.set_setting('TOTAL_MEMORY', 32 * 1024 * 1024)
+
+    so = '.wasm' if self.is_wasm() else '.js'
+
+    def ccshared(src, linkto=[]):
+      cmdv = [PYTHON, EMCC, src, '-o', os.path.splitext(src)[0] + so] + self.get_emcc_args()
+      cmdv += ['-s', 'SIDE_MODULE=1', '-s', 'RUNTIME_LINKED_LIBS=' + str(linkto)]
+      run_process(cmdv)
+
+    ccshared('liba.cpp')
+    ccshared('libb.cpp', ['liba' + so])
+    ccshared('libc.cpp', ['liba' + so])
+
+    self.set_setting('MAIN_MODULE', 1)
+    self.set_setting('RUNTIME_LINKED_LIBS', ['libb' + so, 'libc' + so])
+    do_run(r'''
+      void bfunc();
+      void cfunc();
+
+      int _main() {
+        bfunc();
+        cfunc();
+        return 0;
+      }
+      ''',
+           'a: loaded\na: b (prev: (null))\na: c (prev: b)\n')
+
+    self.set_setting('RUNTIME_LINKED_LIBS', [])
+    self.emcc_args += ['--embed-file', '.@/']
+    do_run(r'''
+      #include <assert.h>
+      #include <dlfcn.h>
+      #include <stddef.h>
+
+      int _main() {
+        void *bdso, *cdso;
+        void (*bfunc)(), (*cfunc)();
+
+        // FIXME for RTLD_LOCAL binding symbols to loaded lib is not currenlty working
+        bdso = dlopen("libb%(so)s", RTLD_GLOBAL);
+        assert(bdso != NULL);
+        cdso = dlopen("libc%(so)s", RTLD_GLOBAL);
+        assert(cdso != NULL);
+
+        bfunc = (void (*)())dlsym(bdso, "_Z5bfuncv");
+        assert(bfunc != NULL);
+        cfunc = (void (*)())dlsym(cdso, "_Z5cfuncv");
+        assert(cfunc != NULL);
+
+        bfunc();
+        cfunc();
+        return 0;
+      }
+    ''' % locals(),
+           'a: loaded\na: b (prev: (null))\na: c (prev: b)\n')
 
   def filtered_js_engines(self, js_engines=None):
     if js_engines is None:
@@ -859,37 +1002,49 @@ class RunnerCore(unittest.TestCase):
 # Run a server and a web page. When a test runs, we tell the server about it,
 # which tells the web page, which then opens a window with the test. Doing
 # it this way then allows the page to close() itself when done.
-def harness_server_func(q, port):
-  class TestServerHandler(BaseHTTPRequestHandler):
-    def do_GET(s):
-      s.send_response(200)
-      s.send_header("Content-type", "text/html")
-      s.end_headers()
-      if s.path == '/run_harness':
-        s.wfile.write(open(path_from_root('tests', 'browser_harness.html'), 'rb').read())
-      else:
-        result = b'False'
-        if not q.empty():
-          result = q.get()
-        s.wfile.write(result)
-
-    def log_request(code=0, size=0):
-      # don't log; too noisy
-      pass
-
-  httpd = HTTPServer(('localhost', port), TestServerHandler)
-  httpd.serve_forever() # test runner will kill us
-
-
-def server_func(dir, q, port):
+def harness_server_func(in_queue, out_queue, port):
   class TestServerHandler(SimpleHTTPRequestHandler):
-    def do_GET(self):
-      if 'report_' in self.path:
-        print('[server response:', self.path, ']')
-        q.put(self.path)
-        # Send a default OK response to the browser.
+    # Request header handler for default do_GET() path in
+    # SimpleHTTPRequestHandler.do_GET(self) below.
+    def send_head(self):
+      if self.path.endswith('.js'):
+        path = self.translate_path(self.path)
+        try:
+          f = open(path, 'rb')
+        except IOError:
+          self.send_error(404, "File not found: " + path)
+          return None
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
+        self.send_header("Content-type", 'application/javascript')
+        self.send_header('Cache-Control', 'no-cache, must-revalidate')
+        self.send_header('Connection', 'close')
+        self.send_header('Expires', '-1')
+        self.end_headers()
+        return f
+      else:
+        return SimpleHTTPRequestHandler.send_head(self)
+
+    def do_GET(self):
+      if self.path == '/run_harness':
+        if DEBUG:
+          print('[server startup]')
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        self.wfile.write(open(path_from_root('tests', 'browser_harness.html'), 'rb').read())
+      elif 'report_' in self.path:
+        if DEBUG:
+          print('[server response:', self.path, ']')
+        if out_queue.empty():
+          out_queue.put(self.path)
+        else:
+          # a badly-behaving test may send multiple xhrs with reported results; we just care
+          # about the first (if we queued the others, they might be read as responses for
+          # later tests)
+          if DEBUG:
+            print('[excessive response, ignoring]')
+        self.send_response(200)
+        self.send_header('Content-type', 'text/plain')
         self.send_header('Cache-Control', 'no-cache, must-revalidate')
         self.send_header('Connection', 'close')
         self.send_header('Expires', '-1')
@@ -904,17 +1059,38 @@ def server_func(dir, q, port):
             xhr.open('GET', encodeURI('http://localhost:8888?stdout=' + text));
             xhr.send();
         '''
-        print('[server logging:', urllib.unquote_plus(self.path), ']')
+        if DEBUG:
+          print('[server logging:', urllib.unquote_plus(self.path), ']')
+      elif self.path == '/check':
+        self.send_response(200)
+        self.send_header('Content-type', 'text/html')
+        self.end_headers()
+        if not in_queue.empty():
+          url, dir = in_queue.get()
+          if DEBUG:
+            print('[queue command:', url, dir, ']')
+          assert in_queue.empty(), 'should not be any blockage - one test runs at a time'
+          assert out_queue.empty(), 'the single response from the last test was read'
+          # tell the browser to load the test
+          self.wfile.write('COMMAND:' + url)
+          # move us to the right place to serve the files
+          os.chdir(dir)
+        else:
+          # the browser must keep polling
+          self.wfile.write('(wait)')
       else:
         # Use SimpleHTTPServer default file serving operation for GET.
+        if DEBUG:
+          print('[simple HTTP serving:', urllib.unquote_plus(self.path), ']')
         SimpleHTTPRequestHandler.do_GET(self)
 
     def log_request(code=0, size=0):
       # don't log; too noisy
       pass
 
+  # allows streaming compilation to work
   SimpleHTTPRequestHandler.extensions_map['.wasm'] = 'application/wasm'
-  os.chdir(dir)
+
   httpd = HTTPServer(('localhost', port), TestServerHandler)
   httpd.serve_forever() # test runner will kill us
 
@@ -935,8 +1111,7 @@ class BrowserCore(RunnerCore):
   def setUpClass(cls):
     super(BrowserCore, cls).setUpClass()
     cls.also_asmjs = int(os.getenv('EMTEST_BROWSER_ALSO_ASMJS', '0')) == 1
-    cls.test_port = int(os.getenv('EMTEST_BROWSER_TEST_PORT', '8888'))
-    cls.harness_port = int(os.getenv('EMTEST_BROWSER_HARNESS_PORT', '9999'))
+    cls.port = int(os.getenv('EMTEST_BROWSER_PORT', '8888'))
     if not has_browser():
       return
     if not EMTEST_BROWSER:
@@ -950,11 +1125,12 @@ class BrowserCore(RunnerCore):
       webbrowser.open_new = run_in_other_browser
       print("Using Emscripten browser: " + str(cmd))
     cls.browser_timeout = 30
-    cls.harness_queue = multiprocessing.Queue()
-    cls.harness_server = multiprocessing.Process(target=harness_server_func, args=(cls.harness_queue, cls.harness_port))
+    cls.harness_in_queue = multiprocessing.Queue()
+    cls.harness_out_queue = multiprocessing.Queue()
+    cls.harness_server = multiprocessing.Process(target=harness_server_func, args=(cls.harness_in_queue, cls.harness_out_queue, cls.port))
     cls.harness_server.start()
     print('[Browser harness server on process %d]' % cls.harness_server.pid)
-    webbrowser.open_new('http://localhost:%s/run_harness' % cls.harness_port)
+    webbrowser.open_new('http://localhost:%s/run_harness' % cls.port)
 
   @classmethod
   def tearDownClass(cls):
@@ -973,34 +1149,22 @@ class BrowserCore(RunnerCore):
       return
     if BrowserCore.unresponsive_tests >= BrowserCore.MAX_UNRESPONSIVE_TESTS:
       self.skipTest('too many unresponsive tests, skipping browser launch - check your setup!')
-    print('[browser launch:', html_file, ']')
+    if DEBUG:
+      print('[browser launch:', html_file, ']')
     if expectedResult is not None:
       try:
-        queue = multiprocessing.Queue()
-        server = multiprocessing.Process(target=functools.partial(server_func, self.get_dir()), args=(queue, self.test_port))
-        server.start()
-        # Starting the web page server above is an asynchronous procedure, so before we tell the browser below to navigate to
-        # the test page, we need to know that the server has started up and is ready to process the site navigation.
-        # Therefore block until we can make a connection to the server.
-        for i in range(10):
-          httpconn = HTTPConnection('localhost:%s' % self.test_port, timeout=1)
-          try:
-            httpconn.connect()
-            httpconn.close()
-            break
-          except:
-            time.sleep(1)
-        else:
-          raise Exception('[Test harness server failed to start up in a timely manner]')
-        self.harness_queue.put(asbytes('http://localhost:%s/%s' % (self.test_port, html_file)))
+        self.harness_in_queue.put((
+          asbytes('http://localhost:%s/%s' % (self.port, html_file)),
+          self.get_dir()
+        ))
         received_output = False
         output = '[no http server activity]'
         start = time.time()
         if timeout is None:
           timeout = self.browser_timeout
         while time.time() - start < timeout:
-          if not queue.empty():
-            output = queue.get()
+          if not self.harness_out_queue.empty():
+            output = self.harness_out_queue.get()
             received_output = True
             break
           time.sleep(0.1)
@@ -1012,7 +1176,6 @@ class BrowserCore(RunnerCore):
         else:
           self.assertIdentical(expectedResult, output)
       finally:
-        server.terminate()
         time.sleep(0.1) # see comment about Windows above
     else:
       webbrowser.open_new(os.path.abspath(html_file))
@@ -1023,7 +1186,7 @@ class BrowserCore(RunnerCore):
       print('(moving on..)')
 
   def with_report_result(self, code):
-    return '#define EMTEST_PORT_NUMBER %d\n#include "%s"\n' % (self.test_port, path_from_root('tests', 'report_result.h')) + code
+    return '#define EMTEST_PORT_NUMBER %d\n#include "%s"\n' % (self.port, path_from_root('tests', 'report_result.h')) + code
 
   # @manually_trigger If set, we do not assume we should run the reftest when main() is done.
   #                   Instead, call doReftest() in JS yourself at the right time.
@@ -1124,7 +1287,7 @@ class BrowserCore(RunnerCore):
           setTimeout(realDoReftest, 1);
         };
       }
-''' % (self.test_port, basename, int(manually_trigger)))
+''' % (self.port, basename, int(manually_trigger)))
 
   def btest(self, filename, expected=None, reference=None, force_c=False,
             reference_slack=0, manual_reference=False, post_build=None,
@@ -1135,7 +1298,7 @@ class BrowserCore(RunnerCore):
     filename_is_src = '\n' in filename
     src = filename if filename_is_src else ''
     original_args = args[:]
-    if 'USE_PTHREADS=1' in args:
+    if 'USE_PTHREADS=1' in args and not self.is_wasm_backend():
       if EMTEST_WASM_PTHREADS:
         also_asmjs = True
       elif 'WASM=0' not in args:
@@ -1143,7 +1306,7 @@ class BrowserCore(RunnerCore):
     if 'WASM=0' not in args:
       # Filter out separate-asm, which is implied by wasm
       args = [a for a in args if a != '--separate-asm']
-    args += ['-DEMTEST_PORT_NUMBER=%d' % self.test_port, '-include', path_from_root('tests', 'report_result.h')]
+    args += ['-DEMTEST_PORT_NUMBER=%d' % self.port, '-include', path_from_root('tests', 'report_result.h')]
     if filename_is_src:
       filepath = os.path.join(self.get_dir(), 'main.c' if force_c else 'main.cpp')
       with open(filepath, 'w') as f:
@@ -1219,6 +1382,47 @@ def get_bullet_library(runner_core, use_cmake):
                                  configure=configure_commands,
                                  configure_args=configure_args,
                                  cache_name_extra=configure_commands[0])
+
+
+def get_freetype_library(runner_core):
+  runner_core.set_setting('DEAD_FUNCTIONS', runner_core.get_setting('DEAD_FUNCTIONS') + ['_inflateEnd', '_inflate', '_inflateReset', '_inflateInit2_'])
+
+  return runner_core.get_library('freetype', os.path.join('objs', '.libs', 'libfreetype.a'))
+
+
+def get_poppler_library(runner_core):
+  # The fontconfig symbols are all missing from the poppler build
+  # e.g. FcConfigSubstitute
+  runner_core.set_setting('ERROR_ON_UNDEFINED_SYMBOLS', 0)
+
+  Building.COMPILER_TEST_OPTS += [
+    '-I' + path_from_root('tests', 'freetype', 'include'),
+    '-I' + path_from_root('tests', 'poppler', 'include')
+  ]
+
+  freetype = get_freetype_library(runner_core)
+
+  # Poppler has some pretty glaring warning.  Suppress them to keep the
+  # test output readable.
+  Building.COMPILER_TEST_OPTS += [
+    '-Wno-sentinel',
+    '-Wno-logical-not-parentheses',
+    '-Wno-unused-private-field',
+    '-Wno-tautological-compare',
+    '-Wno-unknown-pragmas',
+  ]
+  poppler = runner_core.get_library(
+      'poppler',
+      [os.path.join('utils', 'pdftoppm.o'), os.path.join('utils', 'parseargs.o'), os.path.join('poppler', '.libs', 'libpoppler.a')],
+      env_init={'FONTCONFIG_CFLAGS': ' ', 'FONTCONFIG_LIBS': ' '},
+      configure_args=['--disable-libjpeg', '--disable-libpng', '--disable-poppler-qt', '--disable-poppler-qt4', '--disable-cms', '--disable-cairo-output', '--disable-abiword-output', '--enable-shared=no'])
+
+  # Combine libraries
+
+  combined = os.path.join(runner_core.get_dir(), 'poppler-combined.bc')
+  Building.link_to_object(poppler + freetype, combined)
+
+  return combined
 
 
 def check_js_engines():

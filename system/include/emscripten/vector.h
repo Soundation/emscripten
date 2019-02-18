@@ -28,7 +28,7 @@ extern "C" {
 // and all functions in the list order specified in the EcmaScript SIMD.js specification
 // so that cross-referencing changes against the implementation and the specification is much easier.
 
-// Also, if changing this file, remember to do the matching changes in LLVM side at https://github.com/kripken/emscripten-fastcomp/blob/incoming/lib/Target/JSBackend/CallHandlers.h
+// Also, if changing this file, remember to do the matching changes in LLVM side at https://github.com/emscripten-core/emscripten-fastcomp/blob/incoming/lib/Target/JSBackend/CallHandlers.h
 
 typedef double float64x2 __attribute__((__vector_size__(16), __may_alias__));
 typedef float float32x4 __attribute__((__vector_size__(16), __may_alias__));
@@ -478,4 +478,4 @@ int emscripten_bool8x16_allTrue(bool8x16 __a) __attribute__((__nothrow__, __cons
 }
 #endif
 
-#endif
+#endif // __emscripten_vector_h__

@@ -112,11 +112,10 @@ var Fetch = {
     if (isMainThread) {
       addRunDependency('library_fetch_init');
 
-      var fetchJs = 'fetch-worker.js';
-      // Allow HTML module to configure the location where the 'pthread-main.js' file will be loaded from,
-      // via Module.locateFile() function. If not specified, then the default URL 'pthread-main.js' relative
+      // Allow HTML module to configure the location where the 'worker.js' file will be loaded from,
+      // via Module.locateFile() function. If not specified, then the default URL 'worker.js' relative
       // to the main html file is loaded.
-      fetchJs = locateFile(fetchJs);
+      var fetchJs = locateFile('{{{ FETCH_WORKER_FILE }}}');
       Fetch.worker = new Worker(fetchJs);
       Fetch.worker.onmessage = function(e) {
         out('fetch-worker sent a message: ' + e.filename + ':' + e.lineno + ': ' + e.message);
@@ -143,7 +142,7 @@ function __emscripten_fetch_delete_cached_data(db, fetch, onsuccess, onerror) {
   var fetch_attr = fetch + Fetch.fetch_t_offset___attributes;
   var path = HEAPU32[fetch_attr + Fetch.attr_t_offset_destinationPath >> 2];
   if (!path) path = HEAPU32[fetch + Fetch.fetch_t_offset_url >> 2];
-  var pathStr = Pointer_stringify(path);
+  var pathStr = UTF8ToString(path);
 
   try {
     var transaction = db.transaction(['FILES'], 'readwrite');
@@ -192,7 +191,7 @@ function __emscripten_fetch_load_cached_data(db, fetch, onsuccess, onerror) {
   var fetch_attr = fetch + Fetch.fetch_t_offset___attributes;
   var path = HEAPU32[fetch_attr + Fetch.attr_t_offset_destinationPath >> 2];
   if (!path) path = HEAPU32[fetch + Fetch.fetch_t_offset_url >> 2];
-  var pathStr = Pointer_stringify(path);
+  var pathStr = UTF8ToString(path);
 
   try {
     var transaction = db.transaction(['FILES'], 'readonly');
@@ -258,7 +257,7 @@ function __emscripten_fetch_cache_data(db, fetch, data, onsuccess, onerror) {
   var fetch_attr = fetch + Fetch.fetch_t_offset___attributes;
   var destinationPath = HEAPU32[fetch_attr + Fetch.attr_t_offset_destinationPath >> 2];
   if (!destinationPath) destinationPath = HEAPU32[fetch + Fetch.fetch_t_offset_url >> 2];
-  var destinationPathStr = Pointer_stringify(destinationPath);
+  var destinationPathStr = UTF8ToString(destinationPath);
 
   try {
     var transaction = db.transaction(['FILES'], 'readwrite');
@@ -302,10 +301,10 @@ function __emscripten_fetch_xhr(fetch, onsuccess, onerror, onprogress) {
     onerror(fetch, 0, 'no url specified!');
     return;
   }
-  var url_ = Pointer_stringify(url);
+  var url_ = UTF8ToString(url);
 
   var fetch_attr = fetch + Fetch.fetch_t_offset___attributes;
-  var requestMethod = Pointer_stringify(fetch_attr);
+  var requestMethod = UTF8ToString(fetch_attr);
   if (!requestMethod) requestMethod = 'GET';
   var userData = HEAPU32[fetch_attr + Fetch.attr_t_offset_userData >> 2];
   var fetchAttributes = HEAPU32[fetch_attr + Fetch.attr_t_offset_attributes >> 2];
@@ -328,9 +327,9 @@ function __emscripten_fetch_xhr(fetch, onsuccess, onerror, onprogress) {
   var fetchAttrSynchronous = !!(fetchAttributes & 64/*EMSCRIPTEN_FETCH_SYNCHRONOUS*/);
   var fetchAttrWaitable = !!(fetchAttributes & 128/*EMSCRIPTEN_FETCH_WAITABLE*/);
 
-  var userNameStr = userName ? Pointer_stringify(userName) : undefined;
-  var passwordStr = password ? Pointer_stringify(password) : undefined;
-  var overriddenMimeTypeStr = overriddenMimeType ? Pointer_stringify(overriddenMimeType) : undefined;
+  var userNameStr = userName ? UTF8ToString(userName) : undefined;
+  var passwordStr = password ? UTF8ToString(password) : undefined;
+  var overriddenMimeTypeStr = overriddenMimeType ? UTF8ToString(overriddenMimeType) : undefined;
 
   var xhr = new XMLHttpRequest();
   xhr.withCredentials = withCredentials;
@@ -356,8 +355,8 @@ function __emscripten_fetch_xhr(fetch, onsuccess, onerror, onprogress) {
       var value = HEAPU32[requestHeaders + 4 >> 2];
       if (!value) break;
       requestHeaders += 8;
-      var keyStr = Pointer_stringify(key);
-      var valueStr = Pointer_stringify(value);
+      var keyStr = UTF8ToString(key);
+      var valueStr = UTF8ToString(value);
 #if FETCH_DEBUG
       console.log('fetch: xhr.setRequestHeader("' + keyStr + '", "' + valueStr + '");');
 #endif
@@ -471,7 +470,7 @@ function emscripten_start_fetch(fetch, successcb, errorcb, progresscb) {
   if (typeof Module !== 'undefined') Module['noExitRuntime'] = true; // If we are the main Emscripten runtime, we should not be closing down.
 
   var fetch_attr = fetch + Fetch.fetch_t_offset___attributes;
-  var requestMethod = Pointer_stringify(fetch_attr);
+  var requestMethod = UTF8ToString(fetch_attr);
   var onsuccess = HEAPU32[fetch_attr + Fetch.attr_t_offset_onsuccess >> 2];
   var onerror = HEAPU32[fetch_attr + Fetch.attr_t_offset_onerror >> 2];
   var onprogress = HEAPU32[fetch_attr + Fetch.attr_t_offset_onprogress >> 2];
@@ -487,7 +486,7 @@ function emscripten_start_fetch(fetch, successcb, errorcb, progresscb) {
 #if FETCH_DEBUG
     console.log('fetch: operation success. e: ' + e);
 #endif
-    if (onsuccess && typeof dynCall === 'function') Module['dynCall_vi'](onsuccess, fetch);
+    if (onsuccess) Module['dynCall_vi'](onsuccess, fetch);
     else if (successcb) successcb(fetch);
   };
 
@@ -499,21 +498,21 @@ function emscripten_start_fetch(fetch, successcb, errorcb, progresscb) {
 #if FETCH_DEBUG
       console.log('fetch: IndexedDB store succeeded.');
 #endif
-      if (onsuccess && typeof dynCall === 'function') Module['dynCall_vi'](onsuccess, fetch);
+      if (onsuccess) Module['dynCall_vi'](onsuccess, fetch);
       else if (successcb) successcb(fetch);
     };
     var storeError = function(fetch, xhr, e) {
 #if FETCH_DEBUG
       console.error('fetch: IndexedDB store failed.');
 #endif
-      if (onsuccess && typeof dynCall === 'function') Module['dynCall_vi'](onsuccess, fetch);
+      if (onsuccess) Module['dynCall_vi'](onsuccess, fetch);
       else if (successcb) successcb(fetch);
     };
     __emscripten_fetch_cache_data(Fetch.dbInstance, fetch, xhr.response, storeSuccess, storeError);
   };
 
   var reportProgress = function(fetch, xhr, e) {
-    if (onprogress && typeof dynCall === 'function') Module['dynCall_vi'](onprogress, fetch);
+    if (onprogress) Module['dynCall_vi'](onprogress, fetch);
     else if (progresscb) progresscb(fetch);
   };
 
@@ -521,7 +520,7 @@ function emscripten_start_fetch(fetch, successcb, errorcb, progresscb) {
 #if FETCH_DEBUG
     console.error('fetch: operation failed: ' + e);
 #endif
-    if (onerror && typeof dynCall === 'function') Module['dynCall_vi'](onerror, fetch);
+    if (onerror) Module['dynCall_vi'](onerror, fetch);
     else if (errorcb) errorcb(fetch);
   };
 
