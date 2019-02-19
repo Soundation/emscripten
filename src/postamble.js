@@ -407,9 +407,6 @@ function abort(what) {
     Module['onAbort'](what);
   }
 
-#if USE_PTHREADS
-  if (ENVIRONMENT_IS_PTHREAD) console.error('Pthread aborting at ' + new Error().stack);
-#endif
   if (what !== undefined) {
     out(what);
     err(what);
@@ -421,8 +418,12 @@ function abort(what) {
   ABORT = true;
   EXITSTATUS = 1;
 
+#if USE_PTHREADS
+  if (ENVIRONMENT_IS_PTHREAD) throw 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.' + '\nPthread aborting at\n' + stackTrace();
+#endif
+
 #if ASSERTIONS == 0
-  throw 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.' + '\nPthread aborting at\n' + new Error().stack;
+  throw 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.';
 #else
   var extra = '';
   var output = 'abort(' + what + ') at ' + stackTrace() + extra;
