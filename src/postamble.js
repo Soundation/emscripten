@@ -422,7 +422,7 @@ function abort(what) {
   EXITSTATUS = 1;
 
 #if ASSERTIONS == 0
-  throw 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.';
+  throw 'abort(' + what + '). Build with -s ASSERTIONS=1 for more info.' + '\nPthread aborting at\n' + new Error().stack;
 #else
   var extra = '';
   var output = 'abort(' + what + ') at ' + stackTrace() + extra;
