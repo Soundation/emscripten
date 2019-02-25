@@ -661,6 +661,9 @@ If manually bisecting:
     # create_test_file('shell.html', open(path_from_root('src', 'shell.html')).read().replace('var Module = {', 'var Module = { locateFile: function (path) {return "http:/localhost:8888/cdn/" + path;}, '))
     # test()
 
+  def test_dev_random(self):
+    self.btest(os.path.join('filesystem', 'dev_random.cpp'), expected='0')
+
   def test_sdl_swsurface(self):
     self.btest('sdl_swsurface.c', args=['-lSDL', '-lGL'], expected='1')
 
@@ -4068,6 +4071,11 @@ window.close = function() {
   def test_webgl_workaround_webgl_uniform_upload_bug(self):
     self.btest('webgl_draw_triangle_with_uniform_color.c', '0', args=['-lGL', '-s', 'WORKAROUND_OLD_WEBGL_UNIFORM_UPLOAD_IGNORED_OFFSET_BUG=1'])
 
+  # Tests that using an array of structs in GL uniforms works.
+  @requires_graphics_hardware
+  def test_webgl_array_of_structs_uniform(self):
+    self.btest('webgl_array_of_structs_uniform.c', '0', args=['-lGL', '-s', 'USE_WEBGL2=1'], reference='webgl_array_of_structs_uniform.png')
+
   # Tests that if a WebGL context is created in a pthread on a canvas that has not been transferred to that pthread, WebGL calls are then proxied to the main thread
   # -DTEST_OFFSCREEN_CANVAS=1: Tests that if a WebGL context is created on a pthread that has the canvas transferred to it via using Emscripten's EMSCRIPTEN_PTHREAD_TRANSFERRED_CANVASES="#canvas", then OffscreenCanvas is used
   # -DTEST_OFFSCREEN_CANVAS=2: Tests that if a WebGL context is created on a pthread that has the canvas transferred to it via automatic transferring of Module.canvas when EMSCRIPTEN_PTHREAD_TRANSFERRED_CANVASES is not defined, then OffscreenCanvas is also used
@@ -4573,3 +4581,12 @@ window.close = function() {
   @no_wasm_backend('MINIMAL_RUNTIME not yet available in Wasm backend')
   def test_no_declare_asm_module_exports_wasm_minimal_runtime(self):
     self.btest(path_from_root('tests', 'declare_asm_module_exports.cpp'), '1', args=['-s', 'DECLARE_ASM_MODULE_EXPORTS=0', '-s', 'ENVIRONMENT=web', '-O3', '--closure', '1', '-s', 'MINIMAL_RUNTIME=1'])
+
+  # Tests that the different code paths in src/shell_minimal_runtime.html all work ok.
+  @no_wasm_backend('MINIMAL_RUNTIME not yet available in Wasm backend')
+  def test_minimal_runtime_loader_shell(self):
+    args = ['-s', 'MINIMAL_RUNTIME=2']
+    for wasm in [[], ['-s', 'WASM=0', '--memory-init-file', '0'], ['-s', 'WASM=0', '--memory-init-file', '1']]:
+      for modularize in [[], ['-s', 'MODULARIZE=1']]:
+        print(str(args + wasm + modularize))
+        self.btest('minimal_hello.c', '0', args=args + wasm + modularize)

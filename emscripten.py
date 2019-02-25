@@ -377,6 +377,7 @@ def function_tables_and_exports(funcs, metadata, mem_init, glue, forwarded_data,
                                exported_implemented_functions, metadata['initializers'])
 
   post = apply_table(post)
+  post = apply_static_code_hooks(post)
 
   if shared.Settings.MINIMAL_RUNTIME:
     # Generate invocations for all global initializers directly off the asm export object, e.g. asm['__GLOBAL__INIT']();
@@ -695,10 +696,28 @@ def update_settings_glue(metadata):
     shared.Settings.WASM_TABLE_SIZE = metadata['tableSize']
 
 
+# static code hooks
+class StaticCodeHooks:
+  atinits = []
+  atmains = []
+  atexits = []
+
+
+def apply_static_code_hooks(code):
+  code = code.replace('{{{ ATINITS }}}', StaticCodeHooks.atinits)
+  code = code.replace('{{{ ATMAINS }}}', StaticCodeHooks.atmains)
+  code = code.replace('{{{ ATEXITS }}}', StaticCodeHooks.atexits)
+  return code
+
+
 def apply_forwarded_data(forwarded_data):
   forwarded_json = json.loads(forwarded_data)
   # Be aware of JS static allocations
   shared.Settings.STATIC_BUMP = forwarded_json['STATIC_BUMP']
+  # Be aware of JS static code hooks
+  StaticCodeHooks.atinits = str(forwarded_json['ATINITS'])
+  StaticCodeHooks.atmains = str(forwarded_json['ATMAINS'])
+  StaticCodeHooks.atexits = str(forwarded_json['ATEXITS'])
 
 
 def compile_settings(compiler_engine, libraries, temp_files):
@@ -803,6 +822,7 @@ STATICTOP = STATIC_BASE + {staticbump};
     pre = pre.replace('GLOBAL_BASE', 'gb')
 
   pre = apply_memory(pre)
+  pre = apply_static_code_hooks(pre)
 
   return pre
 
@@ -1164,6 +1184,13 @@ def math_fix(g):
   return g if not g.startswith('Math_') else g.split('_')[1]
 
 
+# asm.js function tables have one table in each linked asm.js module, so we
+# can't just dynCall into them - ftCall exists for that purpose. In wasm,
+# even linked modules share the table, so it's all fine.
+def asm_js_emulated_function_pointers():
+  return shared.Settings.EMULATED_FUNCTION_POINTERS and not shared.Settings.WASM
+
+
 def make_function_tables_impls(function_table_data):
   function_tables_impls = []
   for sig, table in function_table_data.items():
@@ -1171,8 +1198,13 @@ def make_function_tables_impls(function_table_data):
     arg_coercions = ' '.join(['a' + str(i) + '=' + shared.JS.make_coercion('a' + str(i), sig[i]) + ';' for i in range(1, len(sig))])
     coerced_args = ','.join([shared.JS.make_coercion('a' + str(i), sig[i]) for i in range(1, len(sig))])
     sig_mask = str(table.count(','))
-    ret = ('return ' if sig[0] != 'v' else '') + shared.JS.make_coercion('FUNCTION_TABLE_%s[index&%s](%s)' % (sig, sig_mask, coerced_args), sig[0])
-    if not shared.Settings.EMULATED_FUNCTION_POINTERS:
+    if not (shared.Settings.WASM and shared.Settings.EMULATED_FUNCTION_POINTERS):
+      ret = 'FUNCTION_TABLE_%s[index&%s](%s)' % (sig, sig_mask, coerced_args)
+    else:
+      # for wasm with emulated function pointers, emit an mft_SIG(..) call, we avoid asm.js function tables there.
+      ret = 'mftCall_%s(index%s%s)' % (sig, ',' if len(sig) > 1 else '', coerced_args)
+    ret = ('return ' if sig[0] != 'v' else '') + shared.JS.make_coercion(ret, sig[0])
+    if not asm_js_emulated_function_pointers():
       function_tables_impls.append('''
 function dynCall_%s(index%s%s) {
   index = index|0;
@@ -1199,7 +1231,7 @@ function jsCall_%s_%s(%s) {
 
 
 def create_mftCall_funcs(function_table_data):
-  if not shared.Settings.EMULATED_FUNCTION_POINTERS:
+  if not asm_js_emulated_function_pointers():
     return []
   if shared.Settings.WASM or not shared.Settings.RELOCATABLE:
     return []
@@ -1488,40 +1520,24 @@ def setup_function_pointers(function_table_sigs):
   for sig in function_table_sigs:
     if shared.Settings.RESERVED_FUNCTION_POINTERS:
       asm_setup += '\n' + shared.JS.make_jscall(sig) + '\n'
-    if shared.Settings.EMULATED_FUNCTION_POINTERS:
-      args = ['a%d' % i for i in range(len(sig) - 1)]
-      full_args = ['x'] + args
-      if shared.Settings.WASM:
-        if shared.Settings.EMULATE_FUNCTION_POINTER_CASTS:
-          # emulated function pointers in wasm use an internal i64-based ABI with a fixed number of arguments. we can't
-          # call into it directly because it returns an i64, which is an error for the VM. instead, we use dynCalls
-          dyn_call = "Module['asm']['dynCall_" + sig + "']"
-          asm_setup += '''
-function ftCall_%s(%s) {
-  return %s(%s);
-}
-''' % (sig, ', '.join(full_args), dyn_call, ', '.join(full_args))
-          # and we are done with this signature, continue
-          continue
-        else:
-          # otherwise, wasm emulated function pointers *without* emulated casts can just all
-          # into the table
-          table_access = "wasmTable"
-          table_read = table_access + '.get(x)'
-      else:
+    # nothing special to do here for wasm, we just use dynCalls
+    if not shared.Settings.WASM:
+      if shared.Settings.EMULATED_FUNCTION_POINTERS:
+        args = ['a%d' % i for i in range(len(sig) - 1)]
+        full_args = ['x'] + args
         table_access = 'FUNCTION_TABLE_' + sig
         if shared.Settings.SIDE_MODULE:
           table_access = 'parentModule["' + table_access + '"]' # side module tables were merged into the parent, we need to access the global one
         table_read = table_access + '[x]'
-      prelude = ''
-      if shared.Settings.ASSERTIONS:
-        prelude = '''
-  if (x < 0 || x >= %s.length) { err("Function table mask error (out of range)"); %s ; abort(x) }''' % (table_access, get_function_pointer_error(sig, function_table_sigs))
-      asm_setup += '''
-function ftCall_%s(%s) {%s
-  return %s(%s);
-}
-''' % (sig, ', '.join(full_args), prelude, table_read, ', '.join(args))
+        prelude = ''
+        if shared.Settings.ASSERTIONS:
+          prelude = '''
+    if (x < 0 || x >= %s.length) { err("Function table mask error (out of range)"); %s ; abort(x) }''' % (table_access, get_function_pointer_error(sig, function_table_sigs))
+        asm_setup += '''
+  function ftCall_%s(%s) {%s
+    return %s(%s);
+  }
+  ''' % (sig, ', '.join(full_args), prelude, table_read, ', '.join(args))
   return asm_setup
 
 
@@ -1545,10 +1561,8 @@ def create_basic_funcs(function_table_sigs, invoke_function_names):
   for sig in function_table_sigs:
     if shared.Settings.RESERVED_FUNCTION_POINTERS:
       basic_funcs.append('jsCall_%s' % sig)
-    if shared.Settings.EMULATED_FUNCTION_POINTERS:
-      # in wasm, emulated function pointers are just simple table calls
-      if not shared.Settings.WASM:
-        basic_funcs.append('ftCall_%s' % sig)
+    if asm_js_emulated_function_pointers():
+      basic_funcs.append('ftCall_%s' % sig)
   return basic_funcs
 
 
@@ -1615,7 +1629,7 @@ def create_asm_runtime_funcs():
 
 
 def function_tables(function_table_data):
-  if not shared.Settings.EMULATED_FUNCTION_POINTERS:
+  if not asm_js_emulated_function_pointers():
     return ['dynCall_' + table for table in function_table_data]
   else:
     return []
@@ -2113,6 +2127,7 @@ def emscript_wasm_backend(infile, outfile, memfile, libraries, compiler_engine,
        global_initializers))
 
   pre = apply_memory(pre)
+  pre = apply_static_code_hooks(pre)
 
   # merge forwarded data
   shared.Settings.EXPORTED_FUNCTIONS = forwarded_json['EXPORTED_FUNCTIONS']
