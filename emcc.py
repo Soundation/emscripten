@@ -193,6 +193,7 @@ class EmccOptions(object):
     self.cpu_profiler = False
     self.thread_profiler = False
     self.memory_profiler = False
+    self.memory_monitor = False
     self.save_bc = False
     self.memory_init_file = None
     self.use_preload_cache = False
@@ -747,6 +748,9 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
 
     if options.memory_profiler:
       options.post_js += open(shared.path_from_root('src', 'memoryprofiler.js')).read() + '\n'
+
+    if options.memory_monitor:
+      options.post_js += open(shared.path_from_root('src', 'tweak_memoryprofiler.js')).read() + '\n'
 
     if options.thread_profiler:
       options.post_js += open(shared.path_from_root('src', 'threadprofiler.js')).read() + '\n'
@@ -2289,6 +2293,11 @@ def parse_args(newargs):
     elif newargs[i] == '-profiling-funcs' or newargs[i] == '--profiling-funcs':
       options.profiling_funcs = True
       newargs[i] = ''
+    elif newargs[i] == '--memorymonitor':
+      options.memory_monitor = True
+      newargs[i] = ''
+      settings_changes.append("EMSCRIPTEN_TRACING=1")
+      options.js_libraries.append(shared.path_from_root('src', 'tweak_library_trace.js'))
     elif newargs[i] == '--tracing' or newargs[i] == '--memoryprofiler':
       if newargs[i] == '--memoryprofiler':
         options.memory_profiler = True
