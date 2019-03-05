@@ -76,11 +76,18 @@ void emscripten_trace_close(void);
 #define emscripten_trace_record_frame_start()
 #define emscripten_trace_record_frame_end()
 #define emscripten_trace_mark(message)
-#define emscripten_trace_log_message(channel, message)
-#define emscripten_trace_report_error(error)
-#define emscripten_trace_record_allocation(address, size)
-#define emscripten_trace_record_reallocation(old_address, new_address, size)
-#define emscripten_trace_record_free(address)
+//#define emscripten_trace_log_message(channel, message)
+//#define emscripten_trace_report_error(error)
+//#define emscripten_trace_record_allocation(address, size)
+//#define emscripten_trace_record_reallocation(old_address, new_address, size)
+//#define emscripten_trace_record_free(address)
+
+void emscripten_trace_record_allocation(const void *address, int32_t size);
+void emscripten_trace_record_reallocation(const void *old_address, const void *new_address, int32_t size);
+void emscripten_trace_record_free(const void *address);
+void emscripten_trace_log_message(const char *channel, const char *message);
+void emscripten_trace_report_error(const char *error);
+
 #define emscripten_trace_annotate_address_type(address, type)
 #define emscripten_trace_associate_storage_size(address, size)
 #define emscripten_trace_report_memory_layout()
