@@ -32,6 +32,8 @@ var emscriptenMemoryMonitor = {
   totalTimesMallocCalled: 0,
   totalTimesFreeCalled: 0,
 
+  peakMemory: 0,
+
   // Converts number f to string with at most two decimals, without redundant trailing zeros.
   truncDec: function truncDec(f) {
     f = f || 0;
@@ -68,6 +70,9 @@ var emscriptenMemoryMonitor = {
     this.sizeOfAllocatedPtr[ptr] = size;
     // Also track if this was a _malloc performed at preRun time.
     if (!this.pagePreRunIsFinished) this.sizeOfPreRunAllocatedPtr[ptr] = size;
+
+    if(this.totalMemoryAllocated > this.peakMemory)
+      this.peakMemory =  this.totalMemoryAllocated;
  },
 
   onFree: function onFree(ptr) {
@@ -134,7 +139,7 @@ var emscriptenMemoryMonitor = {
   // Main UI update entry point.
   updateUi: function updateUi() {
     var DYNAMICTOP = HEAP32[DYNAMICTOP_PTR>>2];
-    err("DYNAMIC memory area used: " + this.formatBytes(this.totalMemoryAllocated));
+    err("DYNAMIC memory area used: " + this.formatBytes(this.totalMemoryAllocated) + " peak: " + this.formatBytes(this.peakMemory));
   }
 };
 
