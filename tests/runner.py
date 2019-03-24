@@ -427,7 +427,7 @@ class RunnerCore(unittest.TestCase):
       with open(ll_filename, 'w') as f:
         f.write(contents)
 
-    if Building.LLVM_OPTS or force_recompile or build_ll_hook:
+    if force_recompile or build_ll_hook:
       if ll_file.endswith(('.bc', '.o')):
         if ll_file != filename + '.o':
           shutil.copy(ll_file, filename + '.o')
@@ -440,8 +440,6 @@ class RunnerCore(unittest.TestCase):
         need_post = build_ll_hook(filename)
       Building.llvm_as(filename)
       shutil.move(filename + '.o.ll', filename + '.o.ll.pre') # for comparisons later
-      if Building.LLVM_OPTS:
-        Building.llvm_opts(filename)
       Building.llvm_dis(filename)
       if build_ll_hook and need_post:
         build_ll_hook(filename)
@@ -470,8 +468,6 @@ class RunnerCore(unittest.TestCase):
   def build(self, src, dirname, filename, main_file=None,
             additional_files=[], libraries=[], includes=[], build_ll_hook=None,
             post_build=None, js_outfile=True):
-
-    Building.LLVM_OPT_OPTS = ['-O3'] # pick llvm opts here, so we include changes to Settings in the test case code
 
     # Copy over necessary files for compiling the source
     if main_file is None:
@@ -511,7 +507,7 @@ class RunnerCore(unittest.TestCase):
                ['-I' + include for include in includes] + \
                ['-c', f, '-o', f + '.o']
         run_process(args, stderr=self.stderr_redirect if not DEBUG else None)
-        assert os.path.exists(f + '.o')
+        self.assertExists(f + '.o')
 
       # Link all files
       object_file = filename + '.o'
@@ -541,7 +537,7 @@ class RunnerCore(unittest.TestCase):
           all_files + ['-o', filename + suffix]
 
       run_process(args, stderr=self.stderr_redirect if not DEBUG else None)
-      assert os.path.exists(filename + suffix)
+      self.assertExists(filename + suffix)
 
     if post_build:
       post_build(filename + suffix)
@@ -653,6 +649,16 @@ class RunnerCore(unittest.TestCase):
       print('-- end program output --')
     return ret
 
+  def assertExists(self, filename, msg=None):
+    if not msg:
+      msg = 'Expected file not found: ' + filename
+    self.assertTrue(os.path.exists(filename), msg)
+
+  def assertNotExists(self, filename, msg=None):
+    if not msg:
+      msg = 'Unexpected file exists: ' + filename
+    self.assertFalse(os.path.exists(filename), msg)
+
   # Tests that the given two paths are identical, modulo path delimiters. E.g. "C:/foo" is equal to "C:\foo".
   def assertPathsIdentical(self, path1, path2):
     path1 = path1.replace('\\', '/')
@@ -715,7 +721,9 @@ class RunnerCore(unittest.TestCase):
       os.makedirs(ret)
     return ret
 
-  def get_library(self, name, generated_libs, configure=['sh', './configure'], configure_args=[], make=['make'], make_args='help', cache=True, env_init={}, cache_name_extra='', native=False):
+  def get_library(self, name, generated_libs, configure=['sh', './configure'],
+                  configure_args=[], make=['make'], make_args='help',
+                  cache=True, env_init={}, cache_name_extra='', native=False):
     if make_args == 'help':
       make_args = ['-j', str(multiprocessing.cpu_count())]
 
@@ -741,8 +749,11 @@ class RunnerCore(unittest.TestCase):
 
     print('<building and saving %s into cache> ' % cache_name, file=sys.stderr)
 
-    return Building.build_library(name, build_dir, output_dir, generated_libs, configure, configure_args, make, make_args, self.library_cache, cache_name,
-                                  copy_project=True, env_init=env_init, native=native)
+    return Building.build_library(name, build_dir, output_dir, generated_libs,
+                                  configure, configure_args, make, make_args,
+                                  self.library_cache, cache_name,
+                                  copy_project=True, env_init=env_init,
+                                  native=native)
 
   def clear(self):
     for name in os.listdir(self.get_dir()):
@@ -1043,9 +1054,9 @@ def harness_server_func(in_queue, out_queue, port):
         else:
           # a badly-behaving test may send multiple xhrs with reported results; we just care
           # about the first (if we queued the others, they might be read as responses for
-          # later tests)
+          # later tests, or maybe the test sends more than one in a racy manner)
           if DEBUG:
-            print('[excessive response, ignoring]')
+            raise Exception('browser harness error, excessive response to server - test must be fixed! "%s"' % self.path)
         self.send_response(200)
         self.send_header('Content-type', 'text/plain')
         self.send_header('Cache-Control', 'no-cache, must-revalidate')
@@ -1326,7 +1337,7 @@ class BrowserCore(RunnerCore):
     # print('all args:', all_args)
     try_delete(outfile)
     run_process(all_args)
-    assert os.path.exists(outfile)
+    self.assertExists(outfile)
     if post_build:
       post_build()
     if not isinstance(expected, list):
@@ -1420,12 +1431,7 @@ def get_poppler_library(runner_core):
       env_init={'FONTCONFIG_CFLAGS': ' ', 'FONTCONFIG_LIBS': ' '},
       configure_args=['--disable-libjpeg', '--disable-libpng', '--disable-poppler-qt', '--disable-poppler-qt4', '--disable-cms', '--disable-cairo-output', '--disable-abiword-output', '--enable-shared=no'])
 
-  # Combine libraries
-
-  combined = os.path.join(runner_core.get_dir(), 'poppler-combined.bc')
-  Building.link_to_object(poppler + freetype, combined)
-
-  return combined
+  return poppler + freetype
 
 
 def check_js_engines():

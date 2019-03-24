@@ -147,7 +147,7 @@ class other(RunnerCore):
     for compiler in [EMCC, EMXX]:
       config_path = './emscripten_config'
       run_process([PYTHON, compiler, '--generate-config', config_path])
-      assert os.path.exists(config_path), 'A config file should have been created at %s' % config_path
+      self.assertExists(config_path, 'A config file should have been created at %s' % config_path)
       config_contents = open(config_path).read()
       self.assertContained('EMSCRIPTEN_ROOT', config_contents)
       self.assertContained('LLVM_ROOT', config_contents)
@@ -161,6 +161,13 @@ class other(RunnerCore):
     # TODO(sbc): Test that this is actually runnable.  We currently don't have
     # any tests for EXPORT_ES6 but once we do this should be enabled.
     # self.assertContained('hello, world!', run_js('hello_world.mjs'))
+
+  def test_emcc_out_file(self):
+    # Verify that "-ofile" works in addition to "-o" "file"
+    run_process([PYTHON, EMCC, '-c', '-ofoo.o', path_from_root('tests', 'hello_world.c')])
+    assert os.path.exists('foo.o')
+    run_process([PYTHON, EMCC, '-ofoo.js', 'foo.o'])
+    assert os.path.exists('foo.js')
 
   def test_emcc_1(self):
     for compiler, suffix in [(EMCC, '.c'), (EMXX, '.cpp')]:
@@ -189,8 +196,8 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
       # emcc src.cpp ==> writes a.out.js and a.out.wasm
       self.clear()
       run_process([PYTHON, compiler, path_from_root('tests', 'hello_world' + suffix)])
-      assert os.path.exists('a.out.js')
-      assert os.path.exists('a.out.wasm')
+      self.assertExists('a.out.js')
+      self.assertExists('a.out.wasm')
       self.assertContained('hello, world!', run_js('a.out.js'))
 
       # properly report source code errors, and stop there
@@ -318,11 +325,11 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
         output = run_process(args, stdout=PIPE, stderr=PIPE)
         assert len(output.stdout) == 0, output.stdout
         if bc_params is not None:
-          assert os.path.exists('something.bc'), output.stderr
+          self.assertExists('something.bc', output.stderr)
           bc_args = [PYTHON, compiler, 'something.bc', '-o', 'something.js'] + bc_params
           print('....', bc_args)
           output = run_process(bc_args, stdout=PIPE, stderr=PIPE)
-        assert os.path.exists('something.js'), output.stderr
+        self.assertExists('something.js', output.stderr)
         self.assertContained('hello, world!', run_js('something.js'))
 
         # Verify optimization level etc. in the generated code
@@ -420,7 +427,7 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
 
         # Combining those object files into js should work
         proc = run_process([PYTHON, compiler, 'twopart_main.o', 'twopart_side.o'] + args, stdout=PIPE, stderr=PIPE)
-        assert os.path.exists(target), proc.stdout + '\n' + proc.stderr
+        self.assertExists(target, proc.stdout + '\n' + proc.stderr)
         self.assertContained('side got: hello from main, over', run_js(target))
 
         # Combining object files into another object should also work
@@ -431,7 +438,7 @@ There is NO warranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR P
         assert len(syms.defs) in (2, 3) and 'main' in syms.defs, 'Should be two functions (and in the wasm backend, also __original_main)'
         proc = run_process([PYTHON, compiler, 'combined.o', '-o', 'combined.o.js'], stdout=PIPE, stderr=PIPE)
         assert len(proc.stdout) == 0, proc.stdout
-        assert os.path.exists('combined.o.js'), 'Expected %s to exist' % ('combined.o.js')
+        self.assertExists('combined.o.js')
         self.assertContained('side got: hello from main, over', run_js('combined.o.js'))
 
   def test_emcc_7(self):
@@ -474,8 +481,9 @@ f.close()
         wasm = '=0' not in str(mode)
         print('  mode', mode, 'wasm?', wasm)
         run_process([PYTHON, EMCC, path_from_root('tests', 'hello_world.c')] + opts + mode)
-        assert os.path.exists('a.out.js')
-        assert os.path.exists('a.out.wasm') == wasm
+        self.assertExists('a.out.js')
+        if wasm:
+          self.assertExists('a.out.wasm')
         for engine in JS_ENGINES:
           print('    engine', engine)
           out = run_js('a.out.js', engine=engine, stderr=PIPE, full_output=True)
@@ -525,7 +533,7 @@ f.close()
         return 'Skipping NMake test for CMake support, since nmake was not found in PATH. Run this test in Visual Studio command prompt to easily access nmake.'
 
     def check_makefile(dirname):
-      assert os.path.exists(dirname + '/Makefile'), 'CMake call did not produce a Makefile!'
+      self.assertExists(dirname + '/Makefile', 'CMake call did not produce a Makefile!')
 
     configurations = {'MinGW Makefiles'     : {'prebuild': check_makefile, # noqa
                                                'build'   : ['mingw32-make'], # noqa
@@ -614,7 +622,7 @@ f.close()
             print('Failed command: ' + ' '.join(cmd))
             print('Result:\n' + ret.stdout)
             self.fail('make failed!')
-          assert os.path.exists(tempdirname + '/' + output_file), 'Building a cmake-generated Makefile failed to produce an output file %s!' % tempdirname + '/' + output_file
+          self.assertExists(tempdirname + '/' + output_file, 'Building a cmake-generated Makefile failed to produce an output file %s!' % tempdirname + '/' + output_file)
 
           # Run through node, if CMake produced a .js file.
           if output_file.endswith('.js'):
@@ -902,6 +910,7 @@ f.close()
     # Case 4: emulate so it works
     test(['-O1', '-s', 'EMULATE_FUNCTION_POINTER_CASTS=1'], 'my func\n')
 
+  @no_wasm_backend('uses EMULATED_FUNCTION_POINTERS')
   def test_emulate_function_pointer_casts_assertions_2(self):
     # check empty tables work with assertions 2 in this mode (#6554)
     run_process([PYTHON, EMCC, path_from_root('tests', 'hello_world.c'), '-s', 'EMULATED_FUNCTION_POINTERS=1', '-s', 'ASSERTIONS=2'])
@@ -1185,7 +1194,7 @@ int main() {
       else:
         self.assertNotContained('undefined symbol', output.stderr)
         out_js = 'a.out.js'
-        assert os.path.exists(out_js), output.stdout + '\n' + output.stderr
+        self.assertExists(out_js, output.stdout + '\n' + output.stderr)
         self.assertContained('result: 42', run_js(out_js))
 
     test(['-Wl,--start-group', lib_name, '-Wl,--start-group'], 'Nested --start-group, missing --end-group?')
@@ -1289,18 +1298,14 @@ int f() {
     # of 'libA.a' after 'libB.a' adds undefined symbol "x", so a.c.o will now be
     # included (and the link will succeed).
     libs = ['-Wl,--start-group'] + libs_list + ['-Wl,--end-group']
-    output = run_process([PYTHON, EMCC] + args + libs, stdout=PIPE, stderr=PIPE)
-    out_js = 'a.out.js'
-    assert os.path.exists(out_js), output.stdout + '\n' + output.stderr
-    self.assertContained('result: 42', run_js(out_js))
+    run_process([PYTHON, EMCC] + args + libs)
+    self.assertContained('result: 42', run_js('a.out.js'))
 
     # -( and -) should also work.
     args = ['main.c', '-o', 'a2.out.js']
     libs = ['-Wl,-('] + libs_list + ['-Wl,-)']
-    output = run_process([PYTHON, EMCC] + args + libs, stdout=PIPE, stderr=PIPE)
-    out_js = 'a2.out.js'
-    assert os.path.exists(out_js), output.stdout + '\n' + output.stderr
-    self.assertContained('result: 42', run_js(out_js))
+    run_process([PYTHON, EMCC] + args + libs)
+    self.assertContained('result: 42', run_js('a2.out.js'))
 
   @needs_dlfcn
   def test_redundant_link(self):
@@ -1359,6 +1364,11 @@ int f() {
     self.assertContained('libf1\nlibf2\n', run_js('a.out.js'))
 
   def test_stdin(self):
+    def make_js_command(filename, engine):
+      if engine is None:
+        engine = tools.shared.JS_ENGINES[0]
+      return jsrun.make_command(filename, engine)
+
     def _test():
       for engine in JS_ENGINES:
         if engine == V8_ENGINE:
@@ -1368,7 +1378,7 @@ int f() {
         # work around a bug in python's subprocess module
         # (we'd use run_js() normally)
         try_delete('out.txt')
-        jscommand = shared.make_js_command(os.path.normpath(exe), engine)
+        jscommand = make_js_command(os.path.normpath(exe), engine)
         if WINDOWS:
           os.system('type "in.txt" | {} >out.txt'.format(' '.join(Building.doublequote_spaces(jscommand))))
         else: # posix
@@ -1986,7 +1996,7 @@ int f() {
       }
       ''')
     run_process([PYTHON, EMCC, 'main.cpp'])
-    assert os.path.exists('a.out.js')
+    self.assertExists('a.out.js')
 
   def test_prepost(self):
     create_test_file('main.cpp', '''
@@ -2095,9 +2105,15 @@ int f() {
   def test_save_bc(self):
     for save in [0, 1]:
       self.clear()
-      run_process([PYTHON, EMCC, path_from_root('tests', 'hello_world_loop_malloc.cpp')] + ([] if not save else ['--save-bc', 'my_bitcode.bc']))
+      cmd = [PYTHON, EMCC, path_from_root('tests', 'hello_world_loop_malloc.cpp')]
+      if save:
+        cmd += ['--save-bc', 'my_bitcode.bc']
+      run_process(cmd)
       assert 'hello, world!' in run_js('a.out.js')
-      assert os.path.exists('my_bitcode.bc') == save
+      if save:
+        self.assertExists('my_bitcode.bc')
+      else:
+        self.assertNotExists('my_bitcode.bc')
       if save:
         try_delete('a.out.js')
         Building.llvm_dis('my_bitcode.bc', 'my_ll.ll')
@@ -2323,17 +2339,17 @@ int f() {
           self.assertFalse(os.path.exists(self.canonical_temp_dir))
         elif debug == '1':
           if self.is_wasm_backend():
-            assert os.path.exists(os.path.join(self.canonical_temp_dir, 'emcc-0-original.js'))
+            self.assertExists(os.path.join(self.canonical_temp_dir, 'emcc-0-original.js'))
           else:
-            assert os.path.exists(os.path.join(self.canonical_temp_dir, 'emcc-0-linktime.bc'))
-            assert os.path.exists(os.path.join(self.canonical_temp_dir, 'emcc-1-original.js'))
+            self.assertExists(os.path.join(self.canonical_temp_dir, 'emcc-0-linktime.bc'))
+            self.assertExists(os.path.join(self.canonical_temp_dir, 'emcc-1-original.js'))
         elif debug == '2':
           if self.is_wasm_backend():
-            assert os.path.exists(os.path.join(self.canonical_temp_dir, 'emcc-0-original.js'))
+            self.assertExists(os.path.join(self.canonical_temp_dir, 'emcc-0-original.js'))
           else:
-            assert os.path.exists(os.path.join(self.canonical_temp_dir, 'emcc-0-basebc.bc'))
-            assert os.path.exists(os.path.join(self.canonical_temp_dir, 'emcc-1-linktime.bc'))
-            assert os.path.exists(os.path.join(self.canonical_temp_dir, 'emcc-2-original.js'))
+            self.assertExists(os.path.join(self.canonical_temp_dir, 'emcc-0-basebc.bc'))
+            self.assertExists(os.path.join(self.canonical_temp_dir, 'emcc-1-linktime.bc'))
+            self.assertExists(os.path.join(self.canonical_temp_dir, 'emcc-2-original.js'))
 
   @uses_canonical_tmp
   def test_debuginfo(self):
@@ -2511,8 +2527,8 @@ seeked= file.
 
     run_process([PYTHON, EMCC, 'main.o', '-s', 'supp.o', '-s', 'SAFE_HEAP=1'])
     self.assertContained('yello', run_js('a.out.js'))
-    code = open('a.out.js').read()
-    assert 'SAFE_HEAP' in code, 'valid -s option had an effect'
+    # Check that valid -s option had an effect'
+    self.assertContained('SAFE_HEAP', open('a.out.js').read())
 
   def test_conftest_s_flag_passing(self):
     create_test_file('conftest.c', r'''
@@ -2524,7 +2540,7 @@ seeked= file.
       cmd = [PYTHON, EMCC, '-s', 'ASSERTIONS=1', 'conftest.c', '-o', 'conftest']
     output = run_process(cmd, stderr=PIPE)
     self.assertNotContained('emcc: warning: treating -s as linker option', output.stderr)
-    assert os.path.exists('conftest')
+    self.assertExists('conftest')
 
   def test_file_packager(self):
     os.mkdir('subdir')
@@ -2721,7 +2737,7 @@ void wakaw::Cm::RasterBase<wakaw::watwat::Polocator>::merbine1<wakaw::Cm::Raster
     run_process([PYTHON, EMCC, path_from_root('tests', 'Module-exports', 'test.c'), '-o', 'test.js', '-O2', '--closure', '0', '--pre-js', path_from_root('tests', 'Module-exports', 'setup.js'), '-s', 'EXPORTED_FUNCTIONS=["_bufferTest"]', '-s', 'EXTRA_EXPORTED_RUNTIME_METHODS=["ccall", "cwrap"]', '-s', 'BINARYEN_ASYNC_COMPILATION=0'], stdout=PIPE, stderr=PIPE)
 
     # Check that compilation was successful
-    assert os.path.exists('test.js')
+    self.assertExists('test.js')
     test_js_closure_0 = open('test.js').read()
 
     # Check that test.js compiled with --closure 0 contains "module['exports'] = Module;"
@@ -2741,7 +2757,7 @@ void wakaw::Cm::RasterBase<wakaw::watwat::Polocator>::merbine1<wakaw::Cm::Raster
     run_process([PYTHON, EMCC, path_from_root('tests', 'Module-exports', 'test.c'), '-o', path_from_root('tests', 'Module-exports', 'test.js'), '-O2', '--closure', '1', '--pre-js', path_from_root('tests', 'Module-exports', 'setup.js'), '-s', 'EXPORTED_FUNCTIONS=["_bufferTest"]', '-s', 'BINARYEN_ASYNC_COMPILATION=0'], stdout=PIPE, stderr=PIPE)
 
     # Check that compilation was successful
-    assert os.path.exists(path_from_root('tests', 'Module-exports', 'test.js'))
+    self.assertExists(path_from_root('tests', 'Module-exports', 'test.js'))
     test_js_closure_1 = open(path_from_root('tests', 'Module-exports', 'test.js')).read()
 
     # Check that test.js compiled with --closure 1 contains "module.exports", we want to verify that
@@ -3151,7 +3167,7 @@ myreade(){
 
     run_process([PYTHON, EMCC, '-MMD', '-c', 'test.cpp', '-o', 'test.o'])
 
-    assert os.path.exists('test.d'), 'No dependency file generated'
+    self.assertExists('test.d')
     deps = open('test.d').read()
     # Look for ': ' instead of just ':' to not confuse C:\path\ notation with make "target: deps" rule. Not perfect, but good enough for this test.
     head, tail = deps.split(': ', 2)
@@ -3175,7 +3191,7 @@ myreade(){
     run_process([PYTHON, EMCC, 'a.c', '-MMD', '-MF', 'test.d', '-c', '-o', 'obj/test.o'])
     self.assertContained(open('test.d').read(), 'obj/test.o: a.c\n')
 
-  def test_quoted_js_lib_key(self):
+  def test_js_lib_quoted_key(self):
     create_test_file('lib.js', r'''
 mergeInto(LibraryManager.library, {
    __internal_data:{
@@ -3189,7 +3205,7 @@ mergeInto(LibraryManager.library, {
     run_process([PYTHON, EMCC, path_from_root('tests', 'hello_world.cpp'), '--js-library', 'lib.js'])
     self.assertContained('hello, world!', run_js('a.out.js'))
 
-  def test_exported_js_lib(self):
+  def test_js_lib_exported(self):
     create_test_file('lib.js', r'''
 mergeInto(LibraryManager.library, {
  jslibfunc: function(x) { return 2 * x }
@@ -3208,6 +3224,28 @@ int main() {
 ''')
     run_process([PYTHON, EMCC, 'src.cpp', '--js-library', 'lib.js', '-s', 'EXPORTED_FUNCTIONS=["_main", "_jslibfunc"]'])
     self.assertContained('c calling: 12\njs calling: 10.', run_js('a.out.js'))
+
+  def test_js_lib_primitive_dep(self):
+    # Verify that primitive dependencies aren't generated in the output JS.
+
+    create_test_file('lib.js', r'''
+mergeInto(LibraryManager.library, {
+  foo__deps: ['Int8Array', 'NonPrimitive'],
+  foo: function() {},
+});
+''')
+    create_test_file('main.c', r'''
+void foo(void);
+
+int main(int argc, char** argv) {
+  foo();
+  return 0;
+}
+''')
+    run_process([PYTHON, EMCC, '-O0', 'main.c', '--js-library', 'lib.js', '-s', 'WARN_ON_UNDEFINED_SYMBOLS=0'])
+    generated = open('a.out.js').read()
+    self.assertContained('missing function: NonPrimitive', generated)
+    self.assertNotContained('missing function: Int8Array', generated)
 
   def test_js_lib_using_asm_lib(self):
     create_test_file('lib.js', r'''
@@ -3318,7 +3356,7 @@ var Module = { print: function(x) { throw '<{(' + x + ')}>' } };
 
       create_test_file('header.h', '#define X 5\n')
       run_process([PYTHON, EMCC, '-xc++-header', 'header.h', '-c'])
-      assert os.path.exists('header.h.gch') # default output is gch
+      self.assertExists('header.h.gch') # default output is gch
       if suffix != 'gch':
         run_process([PYTHON, EMCC, '-xc++-header', 'header.h', '-o', 'header.h.' + suffix])
         assert open('header.h.gch', 'rb').read() == open('header.h.' + suffix, 'rb').read()
@@ -3346,7 +3384,7 @@ int main() {
       # with specified target via -o
       try_delete('header.h.' + suffix)
       run_process([PYTHON, EMCC, '-xc++-header', 'header.h', '-o', 'my.' + suffix])
-      assert os.path.exists('my.' + suffix)
+      self.assertExists('my.' + suffix)
 
       # -include-pch flag
       run_process([PYTHON, EMCC, '-xc++-header', 'header.h', '-o', 'header.h.' + suffix])
@@ -3944,10 +3982,10 @@ int main()
     # (the user would then need to build bc to js of course, but we need to actually
     # emit the bc)
     run_process([PYTHON, EMCC, '-c', path_from_root('tests', 'hello_world.c')])
-    assert os.path.exists('hello_world.o')
+    self.assertExists('hello_world.o')
     run_process([PYTHON, EMCC, 'hello_world.o', '-o', 'hello_world.bc'])
-    assert os.path.exists('hello_world.o')
-    assert os.path.exists('hello_world.bc')
+    self.assertExists('hello_world.o')
+    self.assertExists('hello_world.bc')
 
   def test_bad_function_pointer_cast(self):
     create_test_file('src.cpp', r'''
@@ -3973,9 +4011,11 @@ int main() {
           for emulate_fps in [0, 1]:
             for relocate in [0, 1]:
               for wasm in [0, 1]:
-                if self.is_wasm_backend() and not wasm:
+                if self.is_wasm_backend() and (not wasm or emulate_fps):
                   continue
-                cmd = [PYTHON, EMCC, 'src.cpp', '-O' + str(opts), '-s', 'SAFE_HEAP=' + str(safe), '-s', 'WASM=' + str(wasm)]
+                cmd = [PYTHON, EMCC, 'src.cpp', '-O' + str(opts), '-s', 'SAFE_HEAP=' + str(safe)]
+                if not wasm:
+                  cmd += ['-s', 'WASM=0']
                 if emulate_casts:
                   cmd += ['-s', 'EMULATE_FUNCTION_POINTER_CASTS=1']
                 if emulate_fps:
@@ -4697,7 +4737,7 @@ main()
     with env_modify({'EMCC_FORCE_STDLIBS': 'libc'}):
       test('partial list, but ok since we grab them as needed')
 
-    with env_modify({'EMCC_FORCE_STDLIBS': 'libc', 'EMCC_ONLY_FORCED_STDLIBS': '1'}):
+    with env_modify({'EMCC_FORCE_STDLIBS': 'libc++', 'EMCC_ONLY_FORCED_STDLIBS': '1'}):
       test('fail! not enough stdlibs', fail=True)
 
     with env_modify({'EMCC_FORCE_STDLIBS': 'libc,libc++abi,libc++,libpthreads_stub', 'EMCC_ONLY_FORCED_STDLIBS': '1'}):
@@ -5628,6 +5668,8 @@ function _main() {
 }
 ''', [], '1\n')
 
+  @no_wasm_backend("uses emterpreter")
+  def test_emterpreter_logging(self):
     # codegen log tests
 
     def do_log_test(source, expected, func):
@@ -5858,19 +5900,6 @@ int main(void) {
     output = run_process(NODE_JS + ['-e', 'var m; (global.define = function(deps, factory) { m = factory(); }).amd = true; require("./a.out.js"); m();'], stdout=PIPE, stderr=PIPE)
     assert output.stdout == 'hello, world!\n' and output.stderr == '', 'expected output, got\n===\nSTDOUT\n%s\n===\nSTDERR\n%s\n===\n' % (output.stdout, output.stderr)
 
-  @no_wasm_backend('tests asmjs optimizer')
-  @uses_canonical_tmp
-  def test_native_optimizer(self):
-    def test(args, expected):
-      print(args, expected)
-      with env_modify({'EMCC_DEBUG': '1', 'EMCC_NATIVE_OPTIMIZER': '1'}):
-        err = run_process([PYTHON, EMCC, path_from_root('tests', 'hello_world.c'), '-O2', '-s', 'WASM=0'] + args, stderr=PIPE).stderr
-      assert err.count('js optimizer using native') == expected, [err, expected]
-      self.assertContained('hello, world!', run_js('a.out.js'))
-
-    test([], 1)
-    test(['-s', 'OUTLINING_LIMIT=100000'], 2) # 2, because we run them before and after outline, which is non-native
-
   def test_emconfigure_js_o(self):
     # issue 2994
     for i in [0, 1, 2]:
@@ -5890,7 +5919,7 @@ int main(void) {
             if i == 0 or i == 1:
               assert not os.path.exists('a.out.js') # native .o, not bitcode!
             else:
-              assert os.path.exists('a.out.js')
+              self.assertExists('a.out.js')
 
   @no_wasm_backend('tests fastcomp specific passes')
   @uses_canonical_tmp
@@ -5959,7 +5988,7 @@ Descriptor desc;
     ''')
     try_delete('a.out.js')
     run_process([PYTHON, EMCC, 'src.cpp', '-O2', '-s', 'EXPORT_ALL=1'])
-    assert os.path.exists('a.out.js')
+    self.assertExists('a.out.js')
 
   @no_wasm_backend('tests PRECISE_F32=1')
   def test_f0(self):
@@ -7716,8 +7745,9 @@ int main() {
         cmd = [PYTHON, EMCC, path_from_root('tests', 'hello_world.c'), '-o', os.path.join(temp_dir, 'a.js')] + args
         print(' '.join(cmd))
         run_process(cmd)
-        assert os.path.exists(os.path.join(temp_dir, 'a.asm.js')) == output_asmjs
-        assert not os.path.exists(os.path.join(temp_dir, 'a.temp.asm.js'))
+        if output_asmjs:
+          self.assertExists(os.path.join(temp_dir, 'a.asm.js'))
+        self.assertNotExists(os.path.join(temp_dir, 'a.temp.asm.js'))
 
     # Test that outputting to .wasm does not nuke an existing .asm.js file, if
     # user wants to manually dual-deploy both to same directory.
@@ -7725,13 +7755,13 @@ int main() {
       cmd = [PYTHON, EMCC, path_from_root('tests', 'hello_world.c'), '-s', 'WASM=0', '-o', os.path.join(temp_dir, 'a.js'), '--separate-asm']
       print(' '.join(cmd))
       run_process(cmd)
-      assert os.path.exists(os.path.join(temp_dir, 'a.asm.js'))
+      self.assertExists(os.path.join(temp_dir, 'a.asm.js'))
 
       cmd = [PYTHON, EMCC, path_from_root('tests', 'hello_world.c'), '-o', os.path.join(temp_dir, 'a.js')]
       print(' '.join(cmd))
       run_process(cmd)
-      assert os.path.exists(os.path.join(temp_dir, 'a.asm.js'))
-      assert os.path.exists(os.path.join(temp_dir, 'a.wasm'))
+      self.assertExists(os.path.join(temp_dir, 'a.asm.js'))
+      self.assertExists(os.path.join(temp_dir, 'a.wasm'))
 
       assert not os.path.exists(os.path.join(temp_dir, 'a.temp.asm.js'))
 
@@ -7867,42 +7897,41 @@ int main() {
         sizes.append(os.path.getsize('a.out.wasm'))
     print('sizes:', sizes)
 
-  def run_metadce_tests(self, filename, expectations):
+  def run_metadce_test(self, filename, args, expected_sent, expected_exists, expected_not_exists, expected_size, expected_imports, expected_exports, expected_funcs):
     size_slack = 0.05
 
     # in -Os, -Oz, we remove imports wasm doesn't need
-    for args, expected_sent, expected_exists, expected_not_exists, expected_size, expected_imports, expected_exports, expected_funcs in expectations:
-      print('Running metadce test:', args, expected_sent, expected_exists, expected_not_exists, expected_size, expected_imports, expected_exports, expected_funcs)
-      run_process([PYTHON, EMCC, filename, '-g2'] + args)
-      # find the imports we send from JS
-      js = open('a.out.js').read()
-      start = js.find('asmLibraryArg = ')
-      end = js.find('}', start) + 1
-      start = js.find('{', start)
-      relevant = js[start + 2:end - 2]
-      relevant = relevant.replace(' ', '').replace('"', '').replace("'", '').split(',')
-      sent = [x.split(':')[0].strip() for x in relevant]
-      sent = [x for x in sent if x]
-      sent.sort()
-      print('   sent: ' + str(sent))
-      for exists in expected_exists:
-        self.assertIn(exists, sent)
-      for not_exists in expected_not_exists:
-        self.assertNotIn(not_exists, sent)
-      self.assertEqual(len(sent), expected_sent)
-      wasm_size = os.path.getsize('a.out.wasm')
-      if expected_size is not None:
-        ratio = abs(wasm_size - expected_size) / float(expected_size)
-        print('  seen wasm size: %d (expected: %d), ratio to expected: %f' % (wasm_size, expected_size, ratio))
-      self.assertLess(ratio, size_slack)
-      wast = run_process([os.path.join(Building.get_binaryen_bin(), 'wasm-dis'), 'a.out.wasm'], stdout=PIPE).stdout
-      imports = wast.count('(import ')
-      exports = wast.count('(export ')
-      funcs = wast.count('\n (func ')
-      self.assertEqual(imports, expected_imports)
-      self.assertEqual(exports, expected_exports)
-      if expected_funcs is not None:
-        self.assertEqual(funcs, expected_funcs)
+    print('Running metadce test:', args, expected_sent, expected_exists, expected_not_exists, expected_size, expected_imports, expected_exports, expected_funcs)
+    run_process([PYTHON, EMCC, filename, '-g2'] + args)
+    # find the imports we send from JS
+    js = open('a.out.js').read()
+    start = js.find('asmLibraryArg = ')
+    end = js.find('}', start) + 1
+    start = js.find('{', start)
+    relevant = js[start + 2:end - 2]
+    relevant = relevant.replace(' ', '').replace('"', '').replace("'", '').split(',')
+    sent = [x.split(':')[0].strip() for x in relevant]
+    sent = [x for x in sent if x]
+    sent.sort()
+    print('   sent: ' + str(sent))
+    for exists in expected_exists:
+      self.assertIn(exists, sent)
+    for not_exists in expected_not_exists:
+      self.assertNotIn(not_exists, sent)
+    self.assertEqual(len(sent), expected_sent)
+    wasm_size = os.path.getsize('a.out.wasm')
+    if expected_size is not None:
+      ratio = abs(wasm_size - expected_size) / float(expected_size)
+      print('  seen wasm size: %d (expected: %d), ratio to expected: %f' % (wasm_size, expected_size, ratio))
+    self.assertLess(ratio, size_slack)
+    wast = run_process([os.path.join(Building.get_binaryen_bin(), 'wasm-dis'), 'a.out.wasm'], stdout=PIPE).stdout
+    imports = wast.count('(import ')
+    exports = wast.count('(export ')
+    funcs = wast.count('\n (func ')
+    self.assertEqual(imports, expected_imports)
+    self.assertEqual(exports, expected_exports)
+    if expected_funcs is not None:
+      self.assertEqual(funcs, expected_funcs)
 
   def test_binaryen_metadce_minimal(self):
     create_test_file('minimal.c', '''
@@ -7914,70 +7943,65 @@ int main() {
       }
       ''')
 
+    def run(*args):
+      self.run_metadce_test('minimal.c', *args)
+
     if self.is_wasm_backend():
-      self.run_metadce_tests('minimal.c', [
-        ([],      11, [], ['waka'],  9336,  5, 13, 16), # noqa
-        (['-O1'],  9, [], ['waka'],  8095,  2, 12, 10), # noqa
-        (['-O2'],  9, [], ['waka'],  8077,  2, 12, 10), # noqa
-        # in -O3, -Os and -Oz we metadce, and they shrink it down to the minimal output we want
-        (['-O3'],  0, [], [],          61,  0,  1,  1), # noqa
-        (['-Os'],  0, [], [],          61,  0,  1,  1), # noqa
-        (['-Oz'],  0, [], [],           8,  0,  0,  0), # noqa
-      ])
+      run([],      11, [], ['waka'],  9336,  5, 13, 16) # noqa
+      run(['-O1'],  9, [], ['waka'],  8095,  2, 12, 10) # noqa
+      run(['-O2'],  9, [], ['waka'],  8077,  2, 12, 10) # noqa
+      # in -O3, -Os and -Oz we metadce, and they shrink it down to the minimal output we want
+      run(['-O3'],  0, [], [],          85,  0,  2,  2) # noqa
+      run(['-Os'],  0, [], [],          85,  0,  2,  2) # noqa
+      run(['-Oz'],  0, [], [],          54,  0,  1,  1) # noqa
     else:
-      self.run_metadce_tests('minimal.c', [
-        ([],      20, ['abort'], ['waka'], 22712, 20, 14, 27), # noqa
-        (['-O1'], 10, ['abort'], ['waka'], 10450,  7, 11, 11), # noqa
-        (['-O2'], 10, ['abort'], ['waka'], 10440,  7, 11, 11), # noqa
-        # in -O3, -Os and -Oz we metadce, and they shrink it down to the minimal output we want
-        (['-O3'],  0, [],        [],          55,  0,  1, 1), # noqa
-        (['-Os'],  0, [],        [],          55,  0,  1, 1), # noqa
-        (['-Oz'],  0, [],        [],          55,  0,  1, 1), # noqa
-      ])
+      run([],      20, ['abort'], ['waka'], 22712, 20, 14, 27) # noqa
+      run(['-O1'], 10, ['abort'], ['waka'], 10450,  7, 11, 11) # noqa
+      run(['-O2'], 10, ['abort'], ['waka'], 10440,  7, 11, 11) # noqa
+      # in -O3, -Os and -Oz we metadce, and they shrink it down to the minimal output we want
+      run(['-O3'],  0, [],        [],          55,  0,  1, 1) # noqa
+      run(['-Os'],  0, [],        [],          55,  0,  1, 1) # noqa
+      run(['-Oz'],  0, [],        [],          55,  0,  1, 1) # noqa
 
   def test_binaryen_metadce_cxx(self):
+    def run(*args):
+      self.run_metadce_test(path_from_root('tests', 'hello_libcxx.cpp'), *args)
+
     # test on libc++: see effects of emulated function pointers
     if self.is_wasm_backend():
-      self.run_metadce_tests(path_from_root('tests', 'hello_libcxx.cpp'), [
-        (['-O2'], 32, [], ['waka'], 226582,  20,  32, 562), # noqa
-        (['-O2', '-s', 'EMULATED_FUNCTION_POINTERS=1'],
-                  32, [], ['waka'], 226582,  20,  32, 562), # noqa
-      ]) # noqa
+      run(['-O2'], 32, [], ['waka'], 226582,  20,  33, 562) # noqa
     else:
-      self.run_metadce_tests(path_from_root('tests', 'hello_libcxx.cpp'), [
-        (['-O2'], 34, ['abort'], ['waka'], 196709,  28,   36, 653), # noqa
-        (['-O2', '-s', 'EMULATED_FUNCTION_POINTERS=1'],
-                  34, ['abort'], ['waka'], 196709,  28,   37, 635), # noqa
-      ]) # noqa
+      run(['-O2'], 34, ['abort'], ['waka'], 186423,  28,   36, 534) # noqa
+      run(['-O2', '-s', 'EMULATED_FUNCTION_POINTERS=1'],
+                  34, ['abort'], ['waka'], 186423,  28,   37, 516) # noqa
 
   def test_binaryen_metadce_hello(self):
+    def run(*args):
+      self.run_metadce_test(path_from_root('tests', 'hello_world.cpp'), *args)
+
     if self.is_wasm_backend():
-      self.run_metadce_tests(path_from_root('tests', 'hello_world.cpp'), [
-        ([],      16, [], ['waka'], 26641, 10,  15, 62), # noqa
-        (['-O1'], 14, [], ['waka'], 10668,  8,  14, 29), # noqa
-        (['-O2'], 14, [], ['waka'], 10490,  8,  14, 24), # noqa
-        (['-O3'],  5, [], [],        2453,  7,   3, 14), # noqa; in -O3, -Os and -Oz we metadce
-        (['-Os'],  5, [], [],        2408,  7,   3, 15), # noqa
-        (['-Oz'],  5, [], [],        2367,  7,   2, 14), # noqa
-        # finally, check what happens when we export nothing. wasm should be almost empty
-        (['-Os', '-s', 'EXPORTED_FUNCTIONS=[]'],
-                   0, [], [],          61,  0,   1,  1), # noqa
-      ]) # noqa
+      run([],      16, [], ['waka'], 26641, 10,  15, 62) # noqa
+      run(['-O1'], 14, [], ['waka'], 10668,  8,  14, 29) # noqa
+      run(['-O2'], 14, [], ['waka'], 10490,  8,  14, 24) # noqa
+      run(['-O3'],  5, [], [],        2453,  7,   3, 14) # noqa; in -O3, -Os and -Oz we metadce
+      run(['-Os'],  5, [], [],        2408,  7,   3, 15) # noqa
+      run(['-Oz'],  5, [], [],        2367,  7,   2, 14) # noqa
+      # finally, check what happens when we export nothing. wasm should be almost empty
+      run(['-Os', '-s', 'EXPORTED_FUNCTIONS=[]'],
+                   0, [], [],          61,  0,   1,  1) # noqa
     else:
-      self.run_metadce_tests(path_from_root('tests', 'hello_world.cpp'), [
-        ([],      20, ['abort'], ['waka'], 42701,  20,   14, 49), # noqa
-        (['-O1'], 15, ['abort'], ['waka'], 12630,  14,   13, 30), # noqa
-        (['-O2'], 15, ['abort'], ['waka'], 12616,  14,   13, 30), # noqa
-        (['-O3'],  6, [],        [],        2690,   9,    2, 21), # noqa; in -O3, -Os and -Oz we metadce
-        (['-Os'],  6, [],        [],        2690,   9,    2, 21), # noqa
-        (['-Oz'],  6, [],        [],        2690,   9,    2, 21), # noqa
-        # finally, check what happens when we export nothing. wasm should be almost empty
-        (['-Os', '-s', 'EXPORTED_FUNCTIONS=[]'],
-                   0, [],        [],           8,   0,    0,  0), # noqa; totally empty!
-        # we don't metadce with linkable code! other modules may want stuff
-        (['-O3', '-s', 'MAIN_MODULE=1'],
-                1533, [],        [],      226403,  28,   93, None), # noqa; don't compare the # of functions in a main module, which changes a lot
-      ]) # noqa
+      run([],      20, ['abort'], ['waka'], 42701,  20,   14, 49) # noqa
+      run(['-O1'], 15, ['abort'], ['waka'], 12630,  14,   13, 30) # noqa
+      run(['-O2'], 15, ['abort'], ['waka'], 12616,  14,   13, 26) # noqa
+      run(['-O3'],  6, [],        [],        2443,   9,    2, 14) # noqa; in -O3, -Os and -Oz we metadce
+      run(['-Os'],  6, [],        [],        2412,   9,    2, 16) # noqa
+      run(['-Oz'],  6, [],        [],        2389,   9,    2, 15) # noqa
+      # finally, check what happens when we export nothing. wasm should be almost empty
+      run(['-Os', '-s', 'EXPORTED_FUNCTIONS=[]'],
+                   0, [],        [],           8,   0,    0,  0) # noqa; totally empty!
+      # we don't metadce with linkable code! other modules may want stuff
+      run(['-O3', '-s', 'MAIN_MODULE=1'],
+                1537, [],        [],      226403,  28,   93, None) # noqa; don't compare the # of functions in a main module, which changes a lot
 
   # ensures runtime exports work, even with metadce
   def test_extra_runtime_exports(self):
@@ -7991,8 +8015,8 @@ int main() {
     # test disabling of JS FFI legalization
     wasm_dis = os.path.join(Building.get_binaryen_bin(), 'wasm-dis')
     for (args, js_ffi) in [
-        (['-s', 'LEGALIZE_JS_FFI=1', '-s', 'SIDE_MODULE=1', '-O2', '-s', 'EXPORT_ALL=1'], True),
-        (['-s', 'LEGALIZE_JS_FFI=0', '-s', 'SIDE_MODULE=1', '-O2', '-s', 'EXPORT_ALL=1'], False),
+        (['-s', 'LEGALIZE_JS_FFI=1', '-s', 'SIDE_MODULE=1', '-O1', '-s', 'EXPORT_ALL=1'], True),
+        (['-s', 'LEGALIZE_JS_FFI=0', '-s', 'SIDE_MODULE=1', '-O1', '-s', 'EXPORT_ALL=1'], False),
         (['-s', 'LEGALIZE_JS_FFI=0', '-s', 'SIDE_MODULE=1', '-O0', '-s', 'EXPORT_ALL=1'], False),
         (['-s', 'LEGALIZE_JS_FFI=0', '-s', 'WARN_ON_UNDEFINED_SYMBOLS=0', '-O0'], False),
       ]:
@@ -8099,7 +8123,7 @@ int main() {
 
         self.clear()
         run_process([PYTHON, EMCC, path_from_root('tests', 'hello_world.cpp'), '-o', target] + opts)
-        assert os.path.exists('out.wasm')
+        self.assertExists('out.wasm')
         if target.endswith('.wasm'):
           assert not os.path.exists('out.js'), 'only wasm requested'
         wast = run_process([os.path.join(Building.get_binaryen_bin(), 'wasm-dis'), 'out.wasm'], stdout=PIPE).stdout
@@ -8215,10 +8239,11 @@ int main() {
 
   def test_o_level_clamp(self):
     for level in [3, 4, 20]:
-      err = run_process([PYTHON, EMCC, '-O' + str(level), path_from_root('tests', 'hello_world.c')], stdout=PIPE, stderr=PIPE).stderr
-      assert os.path.exists('a.out.js'), '-O' + str(level) + ' should produce output'
+      err = run_process([PYTHON, EMCC, '-O' + str(level), path_from_root('tests', 'hello_world.c')], stderr=PIPE).stderr
       if level > 3:
         self.assertContained("optimization level '-O" + str(level) + "' is not supported; using '-O3' instead", err)
+      else:
+        self.assertEqual(err, '')
 
   # Tests that if user specifies multiple -o output directives, then the last one will take precedence
   def test_multiple_o_files(self):
@@ -8356,6 +8381,14 @@ end
     self.assertContained('ERROR - Variable dupe declared more than once', proc.stderr)
     proc = test(check=True, extra=['-s', 'IGNORE_CLOSURE_COMPILER_ERRORS=1'])
     self.assertEqual(proc.stderr, '')
+
+  def test_closure_full_js_library(self):
+    # test for closure errors in the entire JS library
+    # We must ignore various types of errors that are expected in this situation, as we
+    # are including a lot of JS without corresponding compiled code for it. This still
+    # lets us catch all other errors.
+    with env_modify({'EMCC_CLOSURE_ARGS': '--jscomp_off undefinedVars'}):
+      run_process([PYTHON, EMCC, path_from_root('tests', 'hello_world.c'), '-O2', '--closure', '1', '-g1', '-s', 'INCLUDE_FULL_LIBRARY=1', '-s', 'ERROR_ON_UNDEFINED_SYMBOLS=0'])
 
   def test_toolchain_profiler(self):
     environ = os.environ.copy()
@@ -9004,17 +9037,24 @@ int main () {
     asmjs = ['-s', 'WASM=0', '--separate-asm', '-s', 'ELIMINATE_DUPLICATE_FUNCTIONS=1', '--memory-init-file', '1']
     opts = ['-O3', '--closure', '1', '-DNDEBUG', '-ffast-math']
 
-    hello_world_sources = [path_from_root('tests', 'small_hello_world.c'), '-s', 'RUNTIME_FUNCS_TO_IMPORT=[]', '-s', 'USES_DYNAMIC_ALLOC=0', '-s', 'ASM_PRIMITIVE_VARS=[STACKTOP]']
-    hello_webgl_sources = [path_from_root('tests', 'minimal_webgl', 'main.cpp'), path_from_root('tests', 'minimal_webgl', 'webgl.c'), '--js-library', path_from_root('tests', 'minimal_webgl', 'library_js.js'),
-                           '-s', 'RUNTIME_FUNCS_TO_IMPORT=[]', '-s', 'USES_DYNAMIC_ALLOC=2', '-lGL', '-s', 'MODULARIZE=1']
+    hello_world_sources = [path_from_root('tests', 'small_hello_world.c'),
+                           '-s', 'RUNTIME_FUNCS_TO_IMPORT=[]',
+                           '-s', 'USES_DYNAMIC_ALLOC=0',
+                           '-s', 'ASM_PRIMITIVE_VARS=[STACKTOP]']
+    hello_webgl_sources = [path_from_root('tests', 'minimal_webgl', 'main.cpp'),
+                           path_from_root('tests', 'minimal_webgl', 'webgl.c'),
+                           '--js-library', path_from_root('tests', 'minimal_webgl', 'library_js.js'),
+                           '-s', 'RUNTIME_FUNCS_TO_IMPORT=[]',
+                           '-s', 'USES_DYNAMIC_ALLOC=2', '-lGL',
+                           '-s', 'MODULARIZE=1']
     hello_webgl2_sources = hello_webgl_sources + ['-s', 'USE_WEBGL2=1']
 
     test_cases = [
       (asmjs + opts, hello_world_sources, {'a.html': 985, 'a.js': 289, 'a.asm.js': 113, 'a.mem': 6}),
       (opts, hello_world_sources, {'a.html': 972, 'a.js': 624, 'a.wasm': 86}),
-      (asmjs + opts, hello_webgl_sources, {'a.html': 885, 'a.js': 4980, 'a.asm.js': 10972, 'a.mem': 321}),
-      (opts, hello_webgl_sources, {'a.html': 861, 'a.js': 5046, 'a.wasm': 8978}),
-      (opts, hello_webgl2_sources, {'a.html': 861, 'a.js': 6182, 'a.wasm': 8978}) # Compare how WebGL2 sizes stack up with WebGL 1
+      (asmjs + opts, hello_webgl_sources, {'a.html': 885, 'a.js': 4980, 'a.asm.js': 10965, 'a.mem': 321}),
+      (opts, hello_webgl_sources, {'a.html': 861, 'a.js': 5046, 'a.wasm': 8842}),
+      (opts, hello_webgl2_sources, {'a.html': 861, 'a.js': 6182, 'a.wasm': 8842}) # Compare how WebGL2 sizes stack up with WebGL 1
     ]
 
     success = True
@@ -9064,3 +9104,27 @@ int main () {
 
     run_process([PYTHON, EMCC, '-s', 'MEMFS_APPEND_TO_TYPED_ARRAYS=1', path_from_root('tests', 'hello_world.c')])
     run_process([PYTHON, EMCC, '-s', 'PRECISE_I64_MATH=2', path_from_root('tests', 'hello_world.c')])
+
+  def test_legacy_settings_strict_mode(self):
+    cmd = [PYTHON, EMCC, path_from_root('tests', 'hello_world.c'), '-s', 'SPLIT_MEMORY=0']
+    run_process(cmd)
+
+    with env_modify({'EMCC_STRICT': '1'}):
+      proc = run_process(cmd, stderr=PIPE, check=False)
+      self.assertNotEqual(proc.returncode, 0)
+      self.assertContained('legacy setting used in strict mode: SPLIT_MEMORY', proc.stderr)
+
+    proc = run_process(cmd + ['-s', 'STRICT=1'], stderr=PIPE, check=False)
+    self.assertNotEqual(proc.returncode, 0)
+    self.assertContained('legacy setting used in strict mode: SPLIT_MEMORY', proc.stderr)
+
+  def test_safe_heap_log(self):
+    self.set_setting('SAFE_HEAP')
+    self.set_setting('SAFE_HEAP_LOG')
+    self.set_setting('EXIT_RUNTIME')
+    src = open(path_from_root('tests', 'hello_world.c')).read()
+    self.do_run(src, 'SAFE_HEAP load: ')
+
+    if not self.is_wasm_backend():
+      self.set_setting('WASM', 0)
+      self.do_run(src, 'SAFE_HEAP load: ')

@@ -11,12 +11,15 @@ import stat
 import time
 import re
 import tempfile
+import zipfile
 
-from runner import RunnerCore, path_from_root, env_modify, chdir, create_test_file
-from tools.shared import NODE_JS, PYTHON, EMCC, SPIDERMONKEY_ENGINE, V8_ENGINE, CONFIG_FILE, PIPE, STDOUT, EM_CONFIG, LLVM_ROOT, CANONICAL_TEMP_DIR
-from tools.shared import run_process, try_delete, run_js, safe_ensure_dirs, expected_llvm_version, generate_sanity
-from tools.shared import Cache, Settings
-from tools import jsrun, shared
+from runner import RunnerCore, path_from_root, env_modify, chdir
+from runner import create_test_file, no_wasm_backend
+from tools.shared import NODE_JS, PYTHON, EMCC, SPIDERMONKEY_ENGINE, V8_ENGINE
+from tools.shared import CONFIG_FILE, PIPE, STDOUT, EM_CONFIG, LLVM_ROOT, CANONICAL_TEMP_DIR
+from tools.shared import run_process, try_delete, run_js, safe_ensure_dirs
+from tools.shared import expected_llvm_version, generate_sanity, Cache, Settings
+from tools import jsrun, shared, system_libs
 
 SANITY_FILE = CONFIG_FILE + '_sanity'
 commands = [[PYTHON, EMCC], [PYTHON, path_from_root('tests', 'runner.py'), 'blahblah']]
@@ -245,7 +248,7 @@ class sanity(RunnerCore):
     restore_and_set_up()
     try_delete('a.out.js')
     output = self.check_working([EMCC, '-s', '--closure', '1'] + MINIMAL_HELLO_WORLD + ['-O2'], '')
-    assert os.path.exists('a.out.js'), output
+    self.assertExists('a.out.js', output)
 
   def test_llvm(self):
     LLVM_WARNING = 'LLVM version appears incorrect'
@@ -328,7 +331,7 @@ class sanity(RunnerCore):
 
     restore_and_set_up()
 
-    self.check_working([EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'ASM_JS=0'], '''ASM_JS must be enabled in fastcomp''')
+    self.check_working([EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'ASM_JS=0'], 'ASM_JS can only be set to either 1 or 2')
 
   def test_node(self):
     NODE_WARNING = 'node version appears too old'
@@ -382,7 +385,7 @@ fi
     assert not os.path.exists(SANITY_FILE) # restore is just the settings, not the sanity
     output = self.check_working(EMCC)
     self.assertContained(SANITY_MESSAGE, output)
-    assert os.path.exists(SANITY_FILE) # EMCC should have checked sanity successfully
+    self.assertExists(SANITY_FILE) # EMCC should have checked sanity successfully
     assert mtime(SANITY_FILE) > mtime(CONFIG_FILE)
     assert generate_sanity() == open(SANITY_FILE).read()
     self.assertNotContained(SANITY_FAIL_MESSAGE, output)
@@ -477,9 +480,9 @@ fi
             assert INCLUDING_MESSAGE.replace('X', 'libc') in output # libc++ always forces inclusion of libc
           assert (BUILDING_MESSAGE.replace('X', libname) in output) == (i == 0), 'Must only build the first time'
           self.assertContained('hello, world!', run_js('a.out.js'))
-          assert os.path.exists(Cache.dirname)
+          self.assertExists(Cache.dirname)
           full_libname = libname + '.bc' if libname != 'libc++' else libname + '.a'
-          assert os.path.exists(os.path.join(Cache.dirname, full_libname))
+          self.assertExists(os.path.join(Cache.dirname, full_libname))
 
     try_delete(CANONICAL_TEMP_DIR)
     restore_and_set_up()
@@ -603,6 +606,7 @@ fi
       os.remove(custom_config_filename + "_sanity")
     shutil.rmtree(temp_dir)
 
+  @no_wasm_backend('depends on WASM=0 working')
   def test_emcc_ports(self):
     restore_and_set_up()
 
@@ -615,66 +619,58 @@ fi
     assert 'SDL2_net' in out, out
 
     # using ports
-
     RETRIEVING_MESSAGE = 'retrieving port'
     BUILDING_MESSAGE = 'generating port'
 
-    from tools import system_libs
     PORTS_DIR = system_libs.Ports.get_dir()
 
-    for compiler in [EMCC]:
-      print(compiler)
+    for i in [0, 1]:
+      self.do([PYTHON, EMCC, '--clear-cache'])
+      print(i)
+      if i == 0:
+        try_delete(PORTS_DIR)
+      else:
+        self.do([PYTHON, EMCC, '--clear-ports'])
+      assert not os.path.exists(PORTS_DIR)
 
-      for i in [0, 1]:
-        self.do([PYTHON, EMCC, '--clear-cache'])
-        print(i)
-        if i == 0:
-          try_delete(PORTS_DIR)
-        else:
-          self.do([PYTHON, compiler, '--clear-ports'])
-        assert not os.path.exists(PORTS_DIR)
+      # Building a file that doesn't need ports should not trigger anything
+      # (avoid wasm to avoid the binaryen port)
+      output = self.do([EMCC, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'WASM=0'])
+      assert RETRIEVING_MESSAGE not in output, output
+      assert BUILDING_MESSAGE not in output
+      print('no', output)
+      assert not os.path.exists(PORTS_DIR)
 
-        # Building a file that doesn't need ports should not trigger anything
-        # (avoid wasm to avoid the binaryen port)
-        output = self.do([compiler, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'WASM=0'])
-        print('no', output)
-        assert RETRIEVING_MESSAGE not in output, output
-        assert BUILDING_MESSAGE not in output
-        assert not os.path.exists(PORTS_DIR)
-
-        # Building a file that need a port does trigger stuff
-        output = self.do([compiler, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'WASM=0', '-s', 'USE_SDL=2'])
-        print('yes', output)
+      def first_use():
+        output = self.do([EMCC, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'WASM=0', '-s', 'USE_SDL=2'])
         assert RETRIEVING_MESSAGE in output, output
         assert BUILDING_MESSAGE in output, output
-        assert os.path.exists(PORTS_DIR)
+        self.assertExists(PORTS_DIR)
+        print('yes', output)
 
-        def second_use():
-          # Using it again avoids retrieve and build
-          output = self.do([compiler, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'WASM=0', '-s', 'USE_SDL=2'])
-          assert RETRIEVING_MESSAGE not in output, output
-          assert BUILDING_MESSAGE not in output, output
+      def second_use():
+        # Using it again avoids retrieve and build
+        output = self.do([EMCC, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'WASM=0', '-s', 'USE_SDL=2'])
+        assert RETRIEVING_MESSAGE not in output, output
+        assert BUILDING_MESSAGE not in output, output
 
-        second_use()
+      # Building a file that need a port does trigger stuff
+      first_use()
+      second_use()
 
-        # if the version isn't sufficient, we retrieve and rebuild
-        subdir = os.listdir(os.path.join(PORTS_DIR, 'sdl2'))[0]
-        os.rename(os.path.join(PORTS_DIR, 'sdl2', subdir), os.path.join(PORTS_DIR, 'sdl2', 'old-subdir'))
-        import zipfile
-        z = zipfile.ZipFile(os.path.join(PORTS_DIR, 'sdl2' + '.zip'), 'w')
-        if not os.path.exists('old-sub'):
-          os.mkdir('old-sub')
-        open(os.path.join('old-sub', 'a.txt'), 'w').write('waka')
-        open(os.path.join('old-sub', 'b.txt'), 'w').write('waka')
+      # if the tag doesn't match, we retrieve and rebuild
+      subdir = os.listdir(os.path.join(PORTS_DIR, 'sdl2'))[0]
+      os.rename(os.path.join(PORTS_DIR, 'sdl2', subdir), os.path.join(PORTS_DIR, 'sdl2', 'old-subdir'))
+      if not os.path.exists('old-sub'):
+        os.mkdir('old-sub')
+      open(os.path.join('old-sub', 'a.txt'), 'w').write('waka')
+      open(os.path.join('old-sub', 'b.txt'), 'w').write('waka')
+      with zipfile.ZipFile(os.path.join(PORTS_DIR, 'sdl2.zip'), 'w') as z:
         z.write(os.path.join('old-sub', 'a.txt'))
         z.write(os.path.join('old-sub', 'b.txt'))
-        z.close()
-        output = self.do([compiler, path_from_root('tests', 'hello_world_sdl.cpp'), '-s', 'WASM=0', '-s', 'USE_SDL=2'])
-        assert RETRIEVING_MESSAGE in output, output
-        assert BUILDING_MESSAGE in output, output
-        assert os.path.exists(PORTS_DIR)
 
-        second_use()
+      first_use()
+      second_use()
 
   def test_d8_path(self):
     """ Test that running JS commands works for node, d8, and jsc and is not path dependent """
@@ -844,15 +840,15 @@ fi
 
     with env_modify({'EMCC_WASM_BACKEND': '1'}):
       self.check_working([EMCC] + MINIMAL_HELLO_WORLD, '')
-      assert os.path.exists(os.path.join(root_cache, 'wasm'))
+      self.assertExists(os.path.join(root_cache, 'wasm'))
 
     with env_modify({'EMCC_WASM_BACKEND': '0'}):
       self.check_working([EMCC] + MINIMAL_HELLO_WORLD, '')
-      assert os.path.exists(os.path.join(root_cache, 'asmjs'))
+      self.assertExists(os.path.join(root_cache, 'asmjs'))
       shutil.rmtree(os.path.join(root_cache, 'asmjs'))
 
     self.check_working([EMCC] + MINIMAL_HELLO_WORLD, '')
-    assert os.path.exists(os.path.join(root_cache, 'asmjs'))
+    self.assertExists(os.path.join(root_cache, 'asmjs'))
 
   def test_wasm_backend_builds(self):
     # we can build a program using the wasm backend, rebuilding binaryen etc. as needed
@@ -904,7 +900,7 @@ BINARYEN_ROOT = ''
     print('build using embuilder')
     prep()
     run_process([PYTHON, EMBUILDER, 'build', 'binaryen'])
-    assert os.path.exists(tag_file)
+    self.assertExists(tag_file)
     run_process([PYTHON, EMCC] + MINIMAL_HELLO_WORLD + ['-s', 'BINARYEN=1'])
     self.assertContained('hello, world!', run_js('a.out.js'))
 
@@ -924,7 +920,7 @@ BINARYEN_ROOT = ''
     # the --lto flag makes us build wasm_bc
     self.do([PYTHON, EMCC, '--clear-cache'])
     run_process([PYTHON, EMBUILDER, 'build', 'emmalloc'])
-    assert os.path.exists(os.path.join(root_cache, 'wasm_o'))
+    self.assertExists(os.path.join(root_cache, 'wasm_o'))
     self.do([PYTHON, EMCC, '--clear-cache'])
     run_process([PYTHON, EMBUILDER, 'build', 'emmalloc', '--lto'])
-    assert os.path.exists(os.path.join(root_cache, 'wasm_bc'))
+    self.assertExists(os.path.join(root_cache, 'wasm_bc'))
