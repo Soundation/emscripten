@@ -1209,7 +1209,7 @@ var BUNDLED_CD_DEBUG_FILE = "";
 // Enabled by default, set this to 0 to disable.
 // If set to 2, we assume TextDecoder is present and usable, and do not emit
 // any JS code to fall back if it is missing.
-var TEXTDECODER = 2;
+var TEXTDECODER = 0;
 
 // Embind specific: If enabled, assume UTF-8 encoded data in std::string binding.
 // Disable this to support binary data transfer.
